@@ -1,0 +1,87 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Standalone happy-server Docker image (bun compile, PGlite embedded Postgres)
+#
+# Strategy: use `bun build --compile` to produce a single self-contained binary.
+# The runner only needs the binary + PGlite WASM files + migration SQL files.
+# No node_modules, no Node.js runtime needed in the final image.
+#
+# NOTE: This build uses standalone/PGlite mode (embedded Postgres). For
+# production with external Postgres, use Dockerfile.server-slim instead.
+# =============================================================================
+
+# Stage 1: install dependencies
+FROM node:20 AS deps
+
+RUN apt-get update && apt-get install -y python3 make g++ build-essential && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
+
+COPY package.json yarn.lock ./
+COPY scripts ./scripts
+COPY patches ./patches
+
+RUN mkdir -p packages/happy-app packages/happy-server packages/happy-cli packages/happy-wire
+
+COPY packages/happy-app/package.json packages/happy-app/
+COPY packages/happy-server/package.json packages/happy-server/
+COPY packages/happy-cli/package.json packages/happy-cli/
+COPY packages/happy-wire/package.json packages/happy-wire/
+
+# Workspace postinstall requirements
+COPY packages/happy-app/patches packages/happy-app/patches
+COPY packages/happy-server/prisma packages/happy-server/prisma
+COPY packages/happy-cli/scripts packages/happy-cli/scripts
+COPY packages/happy-cli/tools packages/happy-cli/tools
+
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn/v6,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    SKIP_HAPPY_WIRE_BUILD=1 yarn install --frozen-lockfile --ignore-engines
+
+# Stage 2: build happy-wire + bun-compile the server binary
+FROM deps AS builder
+
+# Install bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+COPY packages/happy-wire ./packages/happy-wire
+COPY packages/happy-server ./packages/happy-server
+
+# Build happy-wire first (server depends on it)
+RUN yarn workspace @slopus/happy-wire build
+
+# Compile standalone binary
+WORKDIR /repo/packages/happy-server
+RUN bun build ./sources/standalone.ts --compile --outfile dist/happy-server --target bun
+
+# Collect PGlite WASM assets and migrations alongside the binary
+RUN mkdir -p dist/prisma \
+    && find /repo/node_modules/@electric-sql/pglite/dist -name 'pglite.wasm' -exec cp {} dist/ \; \
+    && find /repo/node_modules/@electric-sql/pglite/dist -name 'pglite.data' -exec cp {} dist/ \; \
+    && cp -r prisma/migrations dist/prisma/migrations
+
+# Stage 3: minimal runtime — no Node.js, no node_modules
+FROM debian:bookworm-slim AS runner
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy only the compiled binary and its assets
+COPY --from=builder /repo/packages/happy-server/dist/happy-server /app/happy-server
+COPY --from=builder /repo/packages/happy-server/dist/pglite.wasm /app/pglite.wasm
+COPY --from=builder /repo/packages/happy-server/dist/pglite.data /app/pglite.data
+COPY --from=builder /repo/packages/happy-server/dist/prisma /app/prisma
+
+ENV NODE_ENV=production
+ENV DATA_DIR=/data
+ENV PGLITE_DIR=/data/pglite
+
+VOLUME /data
+EXPOSE 3005
+
+CMD ["/bin/sh", "-c", "/app/happy-server migrate && exec /app/happy-server serve"]

@@ -1,0 +1,109 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Optimized happy-server Docker image (production mode, external Postgres)
+#
+# Strategy: separate build-time deps from production-time deps by trimming the
+# yarn workspace config so only happy-server + happy-wire are installed in the
+# production stage. This eliminates ~4.6 GB of Expo / React Native / CLI deps.
+# =============================================================================
+
+# Stage 1: install ALL workspace deps (needed to build happy-wire with pkgroll)
+FROM node:20 AS deps
+
+RUN apt-get update && apt-get install -y python3 make g++ build-essential && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
+
+COPY package.json yarn.lock ./
+COPY scripts ./scripts
+COPY patches ./patches
+
+RUN mkdir -p packages/happy-app packages/happy-server packages/happy-cli packages/happy-wire
+
+COPY packages/happy-app/package.json packages/happy-app/
+COPY packages/happy-server/package.json packages/happy-server/
+COPY packages/happy-cli/package.json packages/happy-cli/
+COPY packages/happy-wire/package.json packages/happy-wire/
+
+# Workspace postinstall requirements
+COPY packages/happy-app/patches packages/happy-app/patches
+COPY packages/happy-server/prisma packages/happy-server/prisma
+COPY packages/happy-cli/scripts packages/happy-cli/scripts
+COPY packages/happy-cli/tools packages/happy-cli/tools
+
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn/v6,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    SKIP_HAPPY_WIRE_BUILD=1 yarn install --frozen-lockfile --ignore-engines
+
+# Stage 2: build happy-wire + generate prisma client (requires devDeps)
+FROM deps AS builder
+
+COPY packages/happy-wire ./packages/happy-wire
+COPY packages/happy-server ./packages/happy-server
+
+RUN yarn workspace @slopus/happy-wire build
+# prisma generate needs devDeps (prisma-json-types-generator), so run it here
+RUN yarn workspace happy-server generate
+
+# Stage 3: production-only dependencies for server + wire only
+FROM node:20 AS prod-deps
+
+RUN apt-get update && apt-get install -y python3 make g++ build-essential && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
+
+COPY yarn.lock ./
+COPY scripts ./scripts
+COPY patches ./patches
+
+# Only include server + wire workspaces in package.json
+# This prevents yarn from installing deps for happy-app, happy-cli, etc.
+COPY package.json ./package.json.orig
+RUN node -e " \
+    const pkg = JSON.parse(require('fs').readFileSync('package.json.orig','utf8')); \
+    pkg.workspaces = { packages: ['packages/happy-server','packages/happy-wire'] }; \
+    pkg.private = true; \
+    delete pkg.scripts; \
+    require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2)); \
+" && rm package.json.orig
+
+RUN mkdir -p packages/happy-server packages/happy-wire
+
+COPY packages/happy-server/package.json packages/happy-server/
+COPY packages/happy-wire/package.json packages/happy-wire/
+COPY packages/happy-server/prisma packages/happy-server/prisma
+
+# Install production deps only (no --frozen-lockfile since workspace config changed)
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn/v6,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    yarn install --production --ignore-engines --ignore-scripts
+
+# Apply pglite-prisma patch
+RUN node patches/fix-pglite-prisma-bytes.cjs || true
+
+# Copy the generated prisma client from builder (avoids needing devDeps here)
+COPY --from=builder /repo/node_modules/.prisma /repo/node_modules/.prisma
+
+# Stage 4: minimal runtime
+FROM node:20-slim AS runner
+
+WORKDIR /repo
+
+# Runtime-only system deps (no build toolchain)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ffmpeg && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production
+
+# Production node_modules from prod-deps stage (NOT the full workspace deps)
+COPY --from=prod-deps /repo/node_modules /repo/node_modules
+
+# Built happy-wire (dist/) from builder stage
+COPY --from=builder /repo/packages/happy-wire /repo/packages/happy-wire
+
+# Server source + prisma schema/migrations + tsconfig (needed by tsx path aliases)
+COPY --from=builder /repo/packages/happy-server /repo/packages/happy-server
+
+EXPOSE 3000
+
+CMD ["yarn", "--cwd", "packages/happy-server", "start"]
