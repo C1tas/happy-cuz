@@ -6,6 +6,7 @@
 import Fuse from 'fuse.js';
 import { sessionRipgrep } from './ops';
 import { AsyncLock } from '@/utils/lock';
+import { storage } from './storage';
 
 export interface FileItem {
     fileName: string;
@@ -85,7 +86,11 @@ class FileSearchCache {
                 return;
             }
 
-            console.log(`FileSearchCache: Refreshing file cache for session ${sessionId}...`);
+            // Skip RPC if session CLI is not connected
+            const session = storage.getState().sessions[sessionId];
+            if (!session || session.presence !== 'online') {
+                return;
+            }
 
             // Use ripgrep to get all files in the project
             const response = await sessionRipgrep(

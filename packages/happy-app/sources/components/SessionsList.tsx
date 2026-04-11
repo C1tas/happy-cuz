@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Pressable, FlatList, Platform } from 'react-native';
+import { View, Pressable, FlatList, Platform, RefreshControl } from 'react-native';
 import { Text } from '@/components/StyledText';
 import { usePathname } from 'expo-router';
 import { SessionListViewItem } from '@/sync/storage';
@@ -21,6 +21,7 @@ import { UpdateBanner } from './UpdateBanner';
 import { layout } from './layout';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { SessionActionsAnchor, SessionActionsPopover } from './SessionActionsPopover';
+import { reloadAllSessions } from '@/sync/sync';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -179,6 +180,7 @@ export function SessionsList() {
     const pathname = usePathname();
     const isTablet = useIsTablet();
     const compactSessionView = useSetting('compactSessionView');
+    const [refreshing, setRefreshing] = React.useState(false);
     const selectable = isTablet;
     const dataWithSelected = selectable ? React.useMemo(() => {
         return data?.map(item => ({
@@ -193,6 +195,11 @@ export function SessionsList() {
             requestReview();
         }
     }, [data && data.length > 0]);
+
+    const handleRefresh = React.useCallback(() => {
+        setRefreshing(true);
+        reloadAllSessions().finally(() => setRefreshing(false));
+    }, []);
 
     // Early return if no data yet
     if (!data) {
@@ -291,6 +298,7 @@ export function SessionsList() {
                     keyExtractor={keyExtractor}
                     contentContainerStyle={{ paddingBottom: safeArea.bottom + 128, maxWidth: layout.maxWidth }}
                     ListHeaderComponent={HeaderComponent}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
                     windowSize={5}
                     maxToRenderPerBatch={8}
                     initialNumToRender={12}

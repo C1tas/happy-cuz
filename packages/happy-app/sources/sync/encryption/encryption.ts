@@ -100,6 +100,13 @@ export class Encryption {
         this.cache.clearSessionCache(sessionId);
     }
 
+    /**
+     * Clear all session encryption instances (used during full reload)
+     */
+    clearAllSessionEncryptions(): void {
+        this.sessionEncryptions.clear();
+    }
+
     //
     // Machine operations
     //

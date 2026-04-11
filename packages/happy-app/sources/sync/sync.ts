@@ -97,6 +97,8 @@ class Sync {
     private sessionDataKeys = new Map<string, Uint8Array>(); // Store session data encryption keys internally
     private machineDataKeys = new Map<string, Uint8Array>(); // Store machine data encryption keys internally
     private artifactDataKeys = new Map<string, Uint8Array>(); // Store artifact data encryption keys internally
+    private sessionDecryptionFailures = new Map<string, number>();
+    private readonly MAX_DECRYPTION_RETRIES = 3;
     private settingsSync: InvalidateSync;
     private profileSync: InvalidateSync;
     private purchasesSync: InvalidateSync;
@@ -172,6 +174,17 @@ class Sync {
         });
     }
 
+    // Track sessions that fail decryption — after MAX_DECRYPTION_RETRIES, stop retrying
+    private trackSessionDecryptionFailure(sessionId: string): boolean {
+        const count = (this.sessionDecryptionFailures.get(sessionId) || 0) + 1;
+        this.sessionDecryptionFailures.set(sessionId, count);
+        return count >= this.MAX_DECRYPTION_RETRIES;
+    }
+
+    private resetSessionDecryptionFailures() {
+        this.sessionDecryptionFailures.clear();
+    }
+
     async create(credentials: AuthCredentials, encryption: Encryption) {
         this.credentials = credentials;
         this.encryption = encryption;
@@ -179,14 +192,8 @@ class Sync {
         this.serverID = parseToken(credentials.token);
         await this.#init();
 
-        // Await settings sync to have fresh settings
-        await this.settingsSync.awaitQueue();
-
-        // Await profile sync to have fresh profile
-        await this.profileSync.awaitQueue();
-
-        // Await purchases sync to have fresh purchases
-        await this.purchasesSync.awaitQueue();
+        // Settings, profile, and purchases sync in background (already started by #init).
+        // Don't block login — the UI can render while these complete asynchronously.
     }
 
     async restore(credentials: AuthCredentials, encryption: Encryption) {
@@ -229,14 +236,11 @@ class Sync {
         this.feedSync.invalidate();
         log.log('🔄 #init: All syncs invalidated, including artifacts');
 
-        // Wait for both sessions and machines to load, then mark as ready
-        Promise.all([
-            this.sessionsSync.awaitQueue(),
-            this.machinesSync.awaitQueue()
-        ]).then(() => {
+        // Mark data ready once sessions load — machines and other syncs complete in background
+        this.sessionsSync.awaitQueue().then(() => {
             storage.getState().applyReady();
         }).catch((error) => {
-            console.error('Failed to load initial data:', error);
+            console.error('Failed to load sessions:', error);
         });
     }
 
@@ -744,7 +748,11 @@ class Sync {
             if (session.dataEncryptionKey) {
                 let decrypted = await this.encryption.decryptEncryptionKey(session.dataEncryptionKey);
                 if (!decrypted) {
-                    console.error(`Failed to decrypt data encryption key for session ${session.id}`);
+                    const failures = (this.sessionDecryptionFailures.get(session.id) || 0) + 1;
+                    this.sessionDecryptionFailures.set(session.id, failures);
+                    if (failures <= this.MAX_DECRYPTION_RETRIES) {
+                        console.warn(`Failed to decrypt key for session ${session.id} (attempt ${failures}/${this.MAX_DECRYPTION_RETRIES})`);
+                    }
                     continue;
                 }
                 sessionKeys.set(session.id, decrypted);
@@ -794,6 +802,27 @@ class Sync {
 
     public refreshSessions = async () => {
         return this.sessionsSync.invalidateAndAwait();
+    }
+
+    public reloadAllSessions = async () => {
+        // Reset failure tracking so all sessions get a fresh chance
+        this.resetSessionDecryptionFailures();
+
+        // Clear local message cache (MMKV + memory)
+        messageCache.clearAll();
+
+        // Clear session encryption instances — will be re-created from server data
+        this.encryption.clearAllSessionEncryptions();
+
+        // Reset message seq tracking
+        this.sessionLastSeq.clear();
+        this.sessionOldestSeq.clear();
+
+        // Clear in-memory message state
+        storage.getState().clearAllMessages();
+
+        // Re-fetch sessions from server
+        await this.sessionsSync.invalidateAndAwait();
     }
 
     public getCredentials() {
@@ -1612,6 +1641,11 @@ class Sync {
     }
 
     private fetchMessages = async (sessionId: string) => {
+        // Skip if session encryption is permanently unavailable
+        if ((this.sessionDecryptionFailures.get(sessionId) || 0) >= this.MAX_DECRYPTION_RETRIES) {
+            return;
+        }
+
         log.log(`💬 fetchMessages starting for session ${sessionId} - acquiring lock`);
         const lock = this.getSessionMessageLock(sessionId);
         await lock.inLock(async () => {
@@ -1946,6 +1980,7 @@ class Sync {
         // Subscribe to connection state changes
         apiSocket.onReconnected(() => {
             log.log('🔌 Socket reconnected');
+            this.resetSessionDecryptionFailures();
             this.sessionsSync.invalidate();
             this.machinesSync.invalidate();
             log.log('🔌 Socket reconnected: Invalidating artifacts sync');
@@ -1976,9 +2011,12 @@ class Sync {
 
             // Get encryption
             const encryption = this.encryption.getSessionEncryption(updateData.body.sid);
-            if (!encryption) { // Should never happen
-                console.error(`Session ${updateData.body.sid} not found`);
-                this.fetchSessions(); // Just fetch sessions again
+            if (!encryption) {
+                if (this.trackSessionDecryptionFailure(updateData.body.sid)) {
+                    console.warn(`Session ${updateData.body.sid} encryption permanently unavailable, ignoring`);
+                } else {
+                    this.sessionsSync.invalidate();
+                }
                 return;
             }
 
@@ -2036,7 +2074,7 @@ class Sync {
                         }])
                     } else {
                         // Fetch sessions again if we don't have this session
-                        this.fetchSessions();
+                        this.sessionsSync.invalidate();
                     }
 
                     // Fast-path only on consecutive seq values, otherwise fetch from server.
@@ -2516,6 +2554,10 @@ class Sync {
 
 // Global singleton instance
 export const sync = new Sync();
+
+export function reloadAllSessions() {
+    return sync.reloadAllSessions();
+}
 
 //
 // Init sequence

@@ -106,6 +106,7 @@ interface StorageState {
     applyMachines: (machines: Machine[], replace?: boolean) => void;
     applyLoaded: () => void;
     applyReady: () => void;
+    clearAllMessages: () => void;
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean };
     applyMessagesLoaded: (sessionId: string, hasOlderMessages?: boolean) => void;
     applyOlderMessages: (sessionId: string, messages: NormalizedMessage[], hasMore: boolean) => void;
@@ -493,6 +494,10 @@ export const storage = create<StorageState>()((set, get) => {
         applyReady: () => set((state) => ({
             ...state,
             isDataReady: true
+        })),
+        clearAllMessages: () => set((state) => ({
+            ...state,
+            sessionMessages: {},
         })),
         applyMessages: (sessionId: string, messages: NormalizedMessage[]) => {
             let changed = new Set<string>();
