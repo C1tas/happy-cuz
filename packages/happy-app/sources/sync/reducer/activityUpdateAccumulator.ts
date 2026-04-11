@@ -2,7 +2,7 @@ import type { ApiEphemeralActivityUpdate } from '../apiTypes';
 
 export class ActivityUpdateAccumulator {
     private pendingUpdates = new Map<string, ApiEphemeralActivityUpdate>();
-    private lastEmittedStates = new Map<string, { active: boolean; thinking: boolean; activeAt: number }>();
+    private lastEmittedStates = new Map<string, { active: boolean; thinking: boolean; compressing: boolean; activeAt: number }>();
     private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
@@ -19,9 +19,10 @@ export class ActivityUpdateAccumulator {
         const isCriticalTimestamp = timeSinceLastUpdate > 60000; // Half of 120 second timeout
 
         // Check if this is a significant state change that needs immediate emission
-        const isSignificantChange = !lastState || 
-            lastState.active !== update.active || 
+        const isSignificantChange = !lastState ||
+            lastState.active !== update.active ||
             lastState.thinking !== update.thinking ||
+            lastState.compressing !== (update.compressing ?? false) ||
             isCriticalTimestamp;
 
         if (isSignificantChange) {
@@ -64,6 +65,7 @@ export class ActivityUpdateAccumulator {
                 this.lastEmittedStates.set(sessionId, {
                     active: update.active,
                     thinking: update.thinking,
+                    compressing: update.compressing ?? false,
                     activeAt: update.activeAt
                 });
             }

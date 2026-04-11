@@ -474,7 +474,7 @@ export class ApiSessionClient extends EventEmitter {
     /**
      * Send a ping message to keep the connection alive
      */
-    keepAlive(thinking: boolean, mode: 'local' | 'remote') {
+    keepAlive(thinking: boolean, mode: 'local' | 'remote', compressing?: boolean) {
         if (process.env.DEBUG) { // too verbose for production
             logger.debug(`[API] Sending keep alive message: ${thinking}`);
         }
@@ -482,7 +482,8 @@ export class ApiSessionClient extends EventEmitter {
             sid: this.sessionId,
             time: Date.now(),
             thinking,
-            mode
+            mode,
+            compressing: compressing || false
         });
     }
 

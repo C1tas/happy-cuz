@@ -3,7 +3,7 @@ import { Session } from '@/sync/storageTypes';
 import { t } from '@/text';
 import { buildResumeCommand, buildResumeCommandBlock, ResumeCommandBlock } from './resumeCommand';
 
-export type SessionState = 'disconnected' | 'thinking' | 'waiting' | 'permission_required';
+export type SessionState = 'disconnected' | 'thinking' | 'compressing' | 'waiting' | 'permission_required';
 
 export interface SessionStatus {
     state: SessionState;
@@ -47,6 +47,19 @@ export function useSessionStatus(session: Session): SessionStatus {
             shouldShowStatus: true,
             statusColor: '#FF9500',
             statusDotColor: '#FF9500',
+            isPulsing: true
+        };
+    }
+
+    // Check if context compression is in progress
+    if (session.compressing === true) {
+        return {
+            state: 'compressing',
+            isConnected: true,
+            statusText: t('status.compressing'),
+            shouldShowStatus: true,
+            statusColor: '#AF52DE',
+            statusDotColor: '#AF52DE',
             isPulsing: true
         };
     }

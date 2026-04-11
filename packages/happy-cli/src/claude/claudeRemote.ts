@@ -39,6 +39,7 @@ export async function claudeRemote(opts: {
     // Callbacks
     onSessionFound: (id: string) => void,
     onThinkingChange?: (thinking: boolean) => void,
+    onCompressingChange?: (compressing: boolean) => void,
     onMessage: (message: SDKMessage) => void,
     onCompletionEvent?: (message: string) => void,
     onSessionReset?: () => void
@@ -108,6 +109,9 @@ export async function claudeRemote(opts: {
     if (specialCommand.type === 'compact') {
         logger.debug('[claudeRemote] /compact command detected - will process as normal but with compaction behavior');
         isCompactCommand = true;
+        if (opts.onCompressingChange) {
+            opts.onCompressingChange(true);
+        }
         if (opts.onCompletionEvent) {
             opts.onCompletionEvent('Compaction started');
         }
@@ -152,6 +156,9 @@ export async function claudeRemote(opts: {
         }
     };
 
+    // Track system init count for auto-compression detection
+    let initCount = 0;
+
     // Push initial message
     let messages = new PushableAsyncIterable<SDKUserMessage>();
     messages.push({
@@ -182,6 +189,13 @@ export async function claudeRemote(opts: {
             if (message.type === 'system' && message.subtype === 'init') {
                 // Start thinking when session initializes
                 updateThinking(true);
+                initCount++;
+
+                // A second system init during the same query indicates auto-compression (session fork)
+                if (initCount > 1 && opts.onCompressingChange) {
+                    logger.debug('[claudeRemote] Detected auto-compression (reinit)');
+                    opts.onCompressingChange(true);
+                }
 
                 const systemInit = message as SDKSystemMessage;
 
@@ -204,10 +218,19 @@ export async function claudeRemote(opts: {
                 // Send completion messages
                 if (isCompactCommand) {
                     logger.debug('[claudeRemote] Compaction completed');
+                    if (opts.onCompressingChange) {
+                        opts.onCompressingChange(false);
+                    }
                     if (opts.onCompletionEvent) {
                         opts.onCompletionEvent('Compaction completed');
                     }
                     isCompactCommand = false;
+                }
+
+                // Clear auto-compression state on result
+                if (initCount > 1 && opts.onCompressingChange) {
+                    opts.onCompressingChange(false);
+                    initCount = 1; // Reset to prevent re-triggering
                 }
 
                 // Send ready event

@@ -403,6 +403,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         session.onSessionFound(sessionId);
                     },
                     onThinkingChange: session.onThinkingChange,
+                    onCompressingChange: session.onCompressingChange,
                     claudeEnvVars: session.claudeEnvVars,
                     claudeArgs: session.claudeArgs,
                     onMessage,

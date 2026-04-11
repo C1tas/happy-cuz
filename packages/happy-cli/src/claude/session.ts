@@ -29,6 +29,7 @@ export class Session {
     sessionId: string | null;
     mode: 'local' | 'remote' = 'local';
     thinking: boolean = false;
+    compressing: boolean = false;
     
     /** Callbacks to be notified when session ID is found/changed */
     private sessionFoundCallbacks: ((sessionId: string) => void)[] = [];
@@ -76,9 +77,9 @@ export class Session {
         this.noAltScreen = opts.noAltScreen ?? false;
 
         // Start keep alive
-        this.client.keepAlive(this.thinking, this.mode);
+        this.client.keepAlive(this.thinking, this.mode, this.compressing);
         this.keepAliveInterval = setInterval(() => {
-            this.client.keepAlive(this.thinking, this.mode);
+            this.client.keepAlive(this.thinking, this.mode, this.compressing);
         }, 2000);
     }
     
@@ -93,12 +94,17 @@ export class Session {
 
     onThinkingChange = (thinking: boolean) => {
         this.thinking = thinking;
-        this.client.keepAlive(thinking, this.mode);
+        this.client.keepAlive(thinking, this.mode, this.compressing);
+    }
+
+    onCompressingChange = (compressing: boolean) => {
+        this.compressing = compressing;
+        this.client.keepAlive(this.thinking, this.mode, compressing);
     }
 
     onModeChange = (mode: 'local' | 'remote') => {
         this.mode = mode;
-        this.client.keepAlive(this.thinking, mode);
+        this.client.keepAlive(this.thinking, mode, this.compressing);
         this._onModeChange(mode);
     }
 

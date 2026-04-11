@@ -63,6 +63,7 @@ export interface ClientToServerEvents {
     sid: string;
     time: number;
     thinking: boolean;
+    compressing?: boolean;
     mode?: 'local' | 'remote';
   }) => void
   'session-end': (data: { sid: string, time: number }) => void,

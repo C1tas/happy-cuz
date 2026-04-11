@@ -774,6 +774,7 @@ class Sync {
             const processedSession = {
                 ...session,
                 thinking: false,
+                compressing: false,
                 thinkingAt: 0,
                 metadata,
                 agentState
@@ -2421,6 +2422,7 @@ class Sync {
                     active: update.active,
                     activeAt: update.activeAt,
                     thinking: update.thinking ?? false,
+                    compressing: update.compressing ?? false,
                     thinkingAt: update.activeAt // Always use activeAt for consistency
                 });
             }

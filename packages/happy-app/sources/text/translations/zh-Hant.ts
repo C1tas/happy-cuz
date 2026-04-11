@@ -82,6 +82,7 @@ export const zhHant: TranslationStructure = {
         offline: '離線',
         lastSeen: ({ time }: { time: string }) => `最後活躍時間 ${time}`,
         permissionRequired: '需要權限',
+        compressing: '壓縮上下文中\u2026',
         activeNow: '目前活躍',
         unknown: '未知',
     },

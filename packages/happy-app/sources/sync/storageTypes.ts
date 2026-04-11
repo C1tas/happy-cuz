@@ -98,6 +98,7 @@ export interface Session {
     agentState: AgentState | null,
     agentStateVersion: number,
     thinking: boolean,
+    compressing: boolean,
     thinkingAt: number,
     presence: "online" | number, // "online" when active, timestamp when last seen
     todos?: TodoItem[];

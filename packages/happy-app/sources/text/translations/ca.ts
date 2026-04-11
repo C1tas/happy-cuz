@@ -81,6 +81,7 @@ export const ca: TranslationStructure = {
         offline: 'fora de línia',
         lastSeen: ({ time }: { time: string }) => `vist per última vegada ${time}`,
         permissionRequired: 'permís requerit',
+        compressing: 'comprimint context\u2026',
         activeNow: 'Actiu ara',
         unknown: 'desconegut',
     },

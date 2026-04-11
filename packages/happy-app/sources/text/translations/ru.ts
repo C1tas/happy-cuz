@@ -367,6 +367,7 @@ export const ru: TranslationStructure = {
         offline: 'offline',
         lastSeen: ({ time }: { time: string }) => `в сети ${time}`,
         permissionRequired: 'требуется разрешение',
+        compressing: 'сжатие контекста\u2026',
         activeNow: 'Активен сейчас',
         unknown: 'неизвестно',
     },

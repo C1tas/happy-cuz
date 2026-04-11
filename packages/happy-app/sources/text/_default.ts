@@ -80,6 +80,7 @@ export const en = {
         offline: 'offline',
         lastSeen: ({ time }: { time: string }) => `last seen ${time}`,
         permissionRequired: 'permission required',
+        compressing: 'compressing context\u2026',
         activeNow: 'Active now',
         unknown: 'unknown',
     },

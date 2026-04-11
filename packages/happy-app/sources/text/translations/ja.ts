@@ -83,6 +83,7 @@ export const ja: TranslationStructure = {
         offline: 'オフライン',
         lastSeen: ({ time }: { time: string }) => `最終アクセス: ${time}`,
         permissionRequired: '権限が必要です',
+        compressing: 'コンテキスト圧縮中\u2026',
         activeNow: 'アクティブ',
         unknown: '不明',
     },

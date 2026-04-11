@@ -26,7 +26,7 @@ export function startTimeout() {
                 }
                 eventRouter.emitEphemeral({
                     userId: session.accountId,
-                    payload: buildSessionActivityEphemeral(session.id, false, updated[0].lastActiveAt.getTime(), false),
+                    payload: buildSessionActivityEphemeral(session.id, false, updated[0].lastActiveAt.getTime(), false, false),
                     recipientFilter: { type: 'user-scoped-only' }
                 });
             }
