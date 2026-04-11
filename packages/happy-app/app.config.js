@@ -2,12 +2,14 @@ const variant = process.env.APP_ENV || 'development';
 const name = {
     development: "Happy (dev)",
     preview: "Happy (preview)",
-    production: "Happy"
+    production: "Happy",
+    'prod-cuz': "HappyCUZ"
 }[variant];
 const bundleId = {
     development: "com.slopus.happy.dev",
     preview: "com.slopus.happy.preview",
-    production: "com.ex3ndr.happy"
+    production: "com.ex3ndr.happy",
+    'prod-cuz': "com.c1tas.happycuz"
 }[variant];
 // const stagingElevenLabsAgentId = 'agent_7801k2c0r5hjfraa1kdbytpvs6yt';
 const productionElevenLabsAgentId = 'agent_6701k211syvvegba4kt7m68nxjmw';
@@ -15,11 +17,13 @@ const elevenLabsAgentId = {
     development: productionElevenLabsAgentId,
     preview: productionElevenLabsAgentId,
     production: productionElevenLabsAgentId,
+    'prod-cuz': productionElevenLabsAgentId,
 }[variant];
 const consoleLoggingDefault = {
     development: true,
     preview: true,
     production: false,
+    'prod-cuz': false,
 }[variant];
 
 export default {
@@ -43,7 +47,7 @@ export default {
                 NSLocalNetworkUsageDescription: "Allow $(PRODUCT_NAME) to find and connect to local devices on your network.",
                 NSBonjourServices: ["_http._tcp", "_https._tcp"]
             },
-            associatedDomains: variant === 'production' ? ["applinks:app.happy.engineering"] : []
+            associatedDomains: (variant === 'production' || variant === 'prod-cuz') ? ["applinks:app.happy.engineering"] : []
         },
         android: {
             adaptiveIcon: {
@@ -67,7 +71,7 @@ export default {
             ],
             package: bundleId,
             googleServicesFile: "./google-services.json",
-            intentFilters: variant === 'production' ? [
+            intentFilters: (variant === 'production' || variant === 'prod-cuz') ? [
                 {
                     "action": "VIEW",
                     "autoVerify": true,
