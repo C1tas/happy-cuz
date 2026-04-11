@@ -9,7 +9,7 @@ import type { ApiEphemeralActivityUpdate } from './apiTypes';
 import { Session, Machine } from './storageTypes';
 import { InvalidateSync } from '@/utils/sync';
 import { ActivityUpdateAccumulator } from './reducer/activityUpdateAccumulator';
-import { randomUUID } from 'expo-crypto';
+import { randomUUID } from '@/utils/uuid';
 import * as Notifications from 'expo-notifications';
 import { syncCurrentPushToken } from './pushRegistration';
 import { Platform, AppState, type AppStateStatus } from 'react-native';
@@ -1638,7 +1638,7 @@ class Sync {
                         if (normalized) cachedNormalized.push(normalized);
                     }
                     if (cachedNormalized.length > 0) {
-                        this.enqueueMessages(sessionId, cachedNormalized);
+                        this.applyMessages(sessionId, cachedNormalized);
                     }
                     this.sessionLastSeq.set(sessionId, cached.lastSeq);
                     this.sessionOldestSeq.set(sessionId, cached.oldestSeq);
@@ -1673,7 +1673,7 @@ class Sync {
 
                         if (normalizedMessages.length > 0) {
                             totalNew += normalizedMessages.length;
-                            this.enqueueMessages(sessionId, normalizedMessages);
+                            this.applyMessages(sessionId, normalizedMessages);
                         }
 
                         // Cache new messages
@@ -1720,7 +1720,7 @@ class Sync {
                     }
 
                     if (normalizedMessages.length > 0) {
-                        this.enqueueMessages(sessionId, normalizedMessages);
+                        this.applyMessages(sessionId, normalizedMessages);
                     }
 
                     // Cache the fetched messages
@@ -1767,7 +1767,7 @@ class Sync {
 
                     if (normalizedMessages.length > 0) {
                         totalNormalized += normalizedMessages.length;
-                        this.enqueueMessages(sessionId, normalizedMessages);
+                        this.applyMessages(sessionId, normalizedMessages);
                     }
 
                     // Cache incremental messages
@@ -2059,13 +2059,11 @@ class Sync {
                             gitStatusSync.invalidate(updateData.body.sid);
                         }
                     } else {
+                        log.log(`Fast path miss: sid=${updateData.body.sid} currentLastSeq=${currentLastSeq} incomingSeq=${incomingSeq}`);
                         this.getMessagesSync(updateData.body.sid).invalidate();
                     }
                 }
             }
-
-            // Ping session
-            this.onSessionVisible(updateData.body.sid);
 
         } else if (updateData.body.t === 'new-session') {
             log.log('🆕 New session update received');
