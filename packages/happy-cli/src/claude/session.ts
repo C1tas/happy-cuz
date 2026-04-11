@@ -4,6 +4,10 @@ import { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
+import type { SessionHudData } from "@/api/types";
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export class Session {
     readonly path: string;
@@ -30,6 +34,10 @@ export class Session {
     mode: 'local' | 'remote' = 'local';
     thinking: boolean = false;
     compressing: boolean = false;
+    hudData: SessionHudData | null = null;
+
+    /** The Happy session ID used for HUD file naming */
+    private readonly happySessionId: string;
     
     /** Callbacks to be notified when session ID is found/changed */
     private sessionFoundCallbacks: ((sessionId: string) => void)[] = [];
@@ -75,11 +83,13 @@ export class Session {
         this.jsRuntime = opts.jsRuntime ?? 'node';
         this.remoteColor = opts.remoteColor ?? false;
         this.noAltScreen = opts.noAltScreen ?? false;
+        this.happySessionId = opts.client.sessionId;
 
         // Start keep alive
-        this.client.keepAlive(this.thinking, this.mode, this.compressing);
+        this.client.keepAlive(this.thinking, this.mode, this.compressing, this.hudData ?? undefined);
         this.keepAliveInterval = setInterval(() => {
-            this.client.keepAlive(this.thinking, this.mode, this.compressing);
+            this.readHudFile();
+            this.client.keepAlive(this.thinking, this.mode, this.compressing, this.hudData ?? undefined);
         }, 2000);
     }
     
@@ -94,18 +104,29 @@ export class Session {
 
     onThinkingChange = (thinking: boolean) => {
         this.thinking = thinking;
-        this.client.keepAlive(thinking, this.mode, this.compressing);
+        this.client.keepAlive(thinking, this.mode, this.compressing, this.hudData ?? undefined);
     }
 
     onCompressingChange = (compressing: boolean) => {
         this.compressing = compressing;
-        this.client.keepAlive(this.thinking, this.mode, compressing);
+        this.client.keepAlive(this.thinking, this.mode, compressing, this.hudData ?? undefined);
     }
 
     onModeChange = (mode: 'local' | 'remote') => {
         this.mode = mode;
-        this.client.keepAlive(this.thinking, mode, this.compressing);
+        this.client.keepAlive(this.thinking, mode, this.compressing, this.hudData ?? undefined);
         this._onModeChange(mode);
+    }
+
+    /** Read HUD data written by the statusLine wrapper */
+    private readHudFile = (): void => {
+        try {
+            const filePath = join(tmpdir(), `happy-hud-${this.happySessionId}.json`);
+            const data = readFileSync(filePath, 'utf-8');
+            this.hudData = JSON.parse(data);
+        } catch {
+            // File may not exist yet or be mid-write — ignore
+        }
     }
 
     /**

@@ -1,23 +1,52 @@
 /**
  * Generate temporary settings file with Claude hooks for session tracking
- * 
- * Creates a settings.json file that configures Claude's SessionStart hook
- * to notify our HTTP server when sessions change (new session, resume, compact, etc.)
+ * and statusLine wrapper for HUD data capture.
+ *
+ * Creates a settings.json file that configures:
+ * - SessionStart hook: notifies our HTTP server when sessions change
+ * - statusLine: wrapper that captures Claude Code's stdin JSON for HUD reporting
  */
 
 import { join, resolve } from 'node:path';
-import { writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { projectPath } from '@/projectPath';
 
 /**
- * Generate a temporary settings file with SessionStart hook configuration
- * 
+ * Read the user's existing statusLine command from their Claude settings.
+ * Returns the command string or undefined if not configured.
+ */
+function readUserStatusLine(): string | undefined {
+    const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    const settingsPaths = [
+        join(claudeDir, 'settings.local.json'),
+        join(claudeDir, 'settings.json'),
+    ];
+
+    for (const settingsPath of settingsPaths) {
+        try {
+            if (!existsSync(settingsPath)) continue;
+            const data = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+            if (data?.statusLine?.command) {
+                return data.statusLine.command;
+            }
+        } catch {
+            // Ignore parse errors
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Generate a temporary settings file with SessionStart hook and statusLine wrapper
+ *
  * @param port - The port where Happy server is listening
+ * @param sessionId - The Happy session ID for HUD file naming
  * @returns Path to the generated settings file
  */
-export function generateHookSettingsFile(port: number): string {
+export function generateHookSettingsFile(port: number, sessionId?: string): string {
     const hooksDir = join(configuration.happyHomeDir, 'tmp', 'hooks');
     mkdirSync(hooksDir, { recursive: true });
 
@@ -29,7 +58,7 @@ export function generateHookSettingsFile(port: number): string {
     const forwarderScript = resolve(projectPath(), 'scripts', 'session_hook_forwarder.cjs');
     const hookCommand = `node "${forwarderScript}" ${port}`;
 
-    const settings = {
+    const settings: Record<string, unknown> = {
         hooks: {
             SessionStart: [
                 {
@@ -44,6 +73,27 @@ export function generateHookSettingsFile(port: number): string {
             ]
         }
     };
+
+    // Add statusLine wrapper for HUD data capture
+    if (sessionId) {
+        const wrapperScript = resolve(projectPath(), 'scripts', 'status_line_wrapper.cjs');
+        const originalStatusLine = readUserStatusLine();
+
+        // Build wrapper command with env vars
+        const envParts = [`HAPPY_SESSION_ID=${sessionId}`];
+        if (originalStatusLine) {
+            // Escape single quotes in the original command for safe embedding
+            const escaped = originalStatusLine.replace(/'/g, "'\\''");
+            envParts.push(`HAPPY_ORIGINAL_STATUSLINE='${escaped}'`);
+        }
+        const wrapperCommand = `${envParts.join(' ')} node "${wrapperScript}"`;
+
+        settings.statusLine = {
+            type: 'command',
+            command: wrapperCommand
+        };
+        logger.debug(`[generateHookSettings] StatusLine wrapper configured for session ${sessionId}`);
+    }
 
     writeFileSync(filepath, JSON.stringify(settings, null, 2));
     logger.debug(`[generateHookSettings] Created hook settings file: ${filepath}`);

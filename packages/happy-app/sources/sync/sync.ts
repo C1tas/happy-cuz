@@ -2459,7 +2459,8 @@ class Sync {
                     activeAt: update.activeAt,
                     thinking: update.thinking ?? false,
                     compressing: update.compressing ?? false,
-                    thinkingAt: update.activeAt // Always use activeAt for consistency
+                    thinkingAt: update.activeAt, // Always use activeAt for consistency
+                    hud: update.hud ?? session.hud ?? null,
                 });
             }
         }

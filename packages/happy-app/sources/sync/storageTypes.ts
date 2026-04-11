@@ -118,6 +118,16 @@ export interface Session {
         contextSize: number;
         timestamp: number;
     } | null;
+    hud?: {
+        model?: string;
+        contextPercent?: number;
+        contextTokens?: number;
+        contextMax?: number;
+        costUsd?: number;
+        activeTool?: string;
+        activeToolTarget?: string;
+        completedTools?: number;
+    } | null;
 }
 
 export interface DecryptedMessage {

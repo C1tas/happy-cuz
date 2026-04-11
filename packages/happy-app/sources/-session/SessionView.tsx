@@ -1,5 +1,6 @@
 import { AgentContentView } from '@/components/AgentContentView';
 import { AgentInput } from '@/components/AgentInput';
+import { SessionHudBar } from '@/components/SessionHudBar';
 import { layout } from '@/components/layout';
 import {
     getAvailableModels,
@@ -440,6 +441,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const input = isInactiveArchivedSession ? (
         <>
             {archivedHint}
+            <SessionHudBar sessionId={sessionId} />
             {composer}
         </>
     ) : (
@@ -449,6 +451,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                     <ResumeCommandHint resumeCommandBlock={resumeCommandBlock} />
                 </CenteredInputWidth>
             )}
+            <SessionHudBar sessionId={sessionId} />
             {composer}
         </>
     );

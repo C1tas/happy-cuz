@@ -150,6 +150,19 @@ export type ApiUpdateContainer = z.infer<typeof ApiUpdateContainerSchema>;
 // Ephemeral update
 //
 
+export const SessionHudDataSchema = z.object({
+    model: z.string().optional(),
+    contextPercent: z.number().optional(),
+    contextTokens: z.number().optional(),
+    contextMax: z.number().optional(),
+    costUsd: z.number().optional(),
+    activeTool: z.string().optional(),
+    activeToolTarget: z.string().optional(),
+    completedTools: z.number().optional(),
+});
+
+export type SessionHudData = z.infer<typeof SessionHudDataSchema>;
+
 export const ApiEphemeralActivityUpdateSchema = z.object({
     type: z.literal('activity'),
     id: z.string(),
@@ -157,6 +170,7 @@ export const ApiEphemeralActivityUpdateSchema = z.object({
     activeAt: z.number(),
     thinking: z.boolean(),
     compressing: z.boolean().optional(),
+    hud: SessionHudDataSchema.optional(),
 });
 
 export const ApiEphemeralUsageUpdateSchema = z.object({

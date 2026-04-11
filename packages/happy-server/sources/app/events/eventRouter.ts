@@ -164,6 +164,16 @@ export type EphemeralEvent = {
     activeAt: number;
     thinking?: boolean;
     compressing?: boolean;
+    hud?: {
+        model?: string;
+        contextPercent?: number;
+        contextTokens?: number;
+        contextMax?: number;
+        costUsd?: number;
+        activeTool?: string;
+        activeToolTarget?: string;
+        completedTools?: number;
+    };
 } | {
     type: 'machine-activity';
     id: string;
@@ -483,14 +493,15 @@ export function buildUpdateMachineUpdate(machineId: string, updateSeq: number, u
     };
 }
 
-export function buildSessionActivityEphemeral(sessionId: string, active: boolean, activeAt: number, thinking?: boolean, compressing?: boolean): EphemeralPayload {
+export function buildSessionActivityEphemeral(sessionId: string, active: boolean, activeAt: number, thinking?: boolean, compressing?: boolean, hud?: Record<string, unknown>): EphemeralPayload {
     return {
         type: 'activity',
         id: sessionId,
         active,
         activeAt,
         thinking: thinking || false,
-        compressing: compressing || false
+        compressing: compressing || false,
+        hud: hud || undefined
     };
 }
 

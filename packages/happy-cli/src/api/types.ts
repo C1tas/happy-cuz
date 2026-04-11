@@ -55,6 +55,20 @@ export interface ServerToClientEvents {
 
 
 /**
+ * HUD data captured from Claude Code's statusLine stdin
+ */
+export interface SessionHudData {
+    model?: string;
+    contextPercent?: number;
+    contextTokens?: number;
+    contextMax?: number;
+    costUsd?: number;
+    activeTool?: string;
+    activeToolTarget?: string;
+    completedTools?: number;
+}
+
+/**
  * Socket events from client to server
  */
 export interface ClientToServerEvents {
@@ -65,6 +79,7 @@ export interface ClientToServerEvents {
     thinking: boolean;
     compressing?: boolean;
     mode?: 'local' | 'remote';
+    hud?: SessionHudData;
   }) => void
   'session-end': (data: { sid: string, time: number }) => void,
   'update-metadata': (data: { sid: string, expectedVersion: number, metadata: string }, cb: (answer: {
