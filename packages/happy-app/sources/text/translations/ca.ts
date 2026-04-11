@@ -780,6 +780,7 @@ export const ca: TranslationStructure = {
         // Claude permission dialog buttons
         permissions: {
             yesAllowAllEdits: 'Sí, permet totes les edicions durant aquesta sessió',
+            yesBypassPermissions: 'Sí, omet permisos',
             yesForTool: 'Sí, no tornis a preguntar per aquesta eina',
             noTellClaude: 'No, proporciona comentaris',
         }

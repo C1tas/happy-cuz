@@ -574,7 +574,12 @@ export const storage = create<StorageState>()((set, get) => {
                                 ...existingSession.reducerState.latestUsage
                             } : session.latestUsage,
                             // Auto-switch to plan mode when EnterPlanMode tool call is detected
-                            ...(shouldEnterPlanMode && { permissionMode: 'plan' })
+                            ...(shouldEnterPlanMode && {
+                                prePlanPermissionMode: session.permissionMode !== 'plan'
+                                    ? (session.permissionMode || 'default')
+                                    : session.prePlanPermissionMode,
+                                permissionMode: 'plan'
+                            })
                         }
                     };
                 }
@@ -899,11 +904,20 @@ export const storage = create<StorageState>()((set, get) => {
             const session = state.sessions[sessionId];
             if (!session) return state;
 
+            // Track pre-plan mode for restoration on ExitPlanMode
+            const prePlanUpdate: { prePlanPermissionMode?: string | null } =
+                mode === 'plan' && session.permissionMode !== 'plan'
+                    ? { prePlanPermissionMode: session.permissionMode || 'default' }
+                    : session.permissionMode === 'plan' && mode !== 'plan'
+                        ? { prePlanPermissionMode: null }
+                        : {};
+
             // Update the session with the new permission mode
             const updatedSessions = {
                 ...state.sessions,
                 [sessionId]: {
                     ...session,
+                    ...prePlanUpdate,
                     permissionMode: mode
                 }
             };

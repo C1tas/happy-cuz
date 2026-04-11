@@ -29,6 +29,11 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     
     // Check if this is a Codex session - check both metadata.flavor and tool name prefix
     const isCodex = metadata?.flavor === 'codex' || toolName.startsWith('Codex');
+    const isExitPlan = toolName === 'exit_plan_mode' || toolName === 'ExitPlanMode';
+
+    // For ExitPlanMode, read the pre-plan permission mode to show correct buttons
+    const prePlanMode = isExitPlan ? storage.getState().sessions[sessionId]?.prePlanPermissionMode : null;
+    const wasInBypass = prePlanMode === 'bypassPermissions' || prePlanMode === 'dontAsk';
 
     const handleApprove = async () => {
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
@@ -54,6 +59,25 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         } catch (error) {
             console.error('Failed to approve all edits:', error);
         } finally {
+            setLoadingAllEdits(false);
+        }
+    };
+
+    const handleApproveExitPlan = async (restoreMode: string) => {
+        if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
+
+        if (restoreMode === 'bypassPermissions') {
+            setLoadingButton('allow');
+        } else {
+            setLoadingAllEdits(true);
+        }
+        try {
+            await sessionAllow(sessionId, permission.id, restoreMode as any);
+            storage.getState().updateSessionPermissionMode(sessionId, restoreMode);
+        } catch (error) {
+            console.error('Failed to approve exit plan:', error);
+        } finally {
+            setLoadingButton(null);
             setLoadingAllEdits(false);
         }
     };
@@ -152,8 +176,9 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     };
 
     // Detect which button was used based on mode (for Claude) or decision (for Codex)
-    const isApprovedViaAllow = isApproved && permission.mode !== 'acceptEdits' && !isToolAllowed(toolName, toolInput, permission.allowedTools);
+    const isApprovedViaAllow = isApproved && permission.mode !== 'acceptEdits' && permission.mode !== 'bypassPermissions' && !isToolAllowed(toolName, toolInput, permission.allowedTools);
     const isApprovedViaAllEdits = isApproved && permission.mode === 'acceptEdits';
+    const isApprovedViaBypas = isApproved && permission.mode === 'bypassPermissions';
     const isApprovedForSession = isApproved && isToolAllowed(toolName, toolInput, permission.allowedTools);
     
     // Codex-specific status detection with fallback
@@ -357,94 +382,220 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     return (
         <View style={styles.container}>
             <View style={styles.buttonContainer}>
-                <TouchableOpacity
-                    style={[
-                        styles.button,
-                        isPending && styles.buttonAllow,
-                        isApprovedViaAllow && styles.buttonSelected,
-                        (isDenied || isApprovedViaAllEdits || isApprovedForSession) && styles.buttonInactive
-                    ]}
-                    onPress={handleApprove}
-                    disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
-                    activeOpacity={isPending ? 0.7 : 1}
-                >
-                    {loadingButton === 'allow' && isPending ? (
-                        <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
-                            <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllow.color} />
-                        </View>
-                    ) : (
-                        <View style={styles.buttonContent}>
-                            <Text style={[
-                                styles.buttonText,
-                                isPending && styles.buttonTextAllow,
-                                isApprovedViaAllow && styles.buttonTextSelected
-                            ]} numberOfLines={1} ellipsizeMode="tail">
-                                {t('common.yes')}
-                            </Text>
-                        </View>
-                    )}
-                </TouchableOpacity>
+                {/* ExitPlanMode: show bypass button when pre-plan mode was bypassPermissions */}
+                {isExitPlan && wasInBypass ? (
+                    <>
+                        {/* Bypass permissions button (primary for YOLO users) */}
+                        <TouchableOpacity
+                            style={[
+                                styles.button,
+                                isPending && styles.buttonAllow,
+                                isApprovedViaBypas && styles.buttonSelected,
+                                (isDenied || isApprovedViaAllEdits) && styles.buttonInactive
+                            ]}
+                            onPress={() => handleApproveExitPlan('bypassPermissions')}
+                            disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                            activeOpacity={isPending ? 0.7 : 1}
+                        >
+                            {loadingButton === 'allow' && isPending ? (
+                                <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllow.color} />
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContent}>
+                                    <Text style={[
+                                        styles.buttonText,
+                                        isPending && styles.buttonTextAllow,
+                                        isApprovedViaBypas && styles.buttonTextSelected
+                                    ]} numberOfLines={1} ellipsizeMode="tail">
+                                        {t('claude.permissions.yesBypassPermissions')}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
 
-                {/* Allow All Edits button - only show for Edit and MultiEdit tools */}
-                {(toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write' || toolName === 'NotebookEdit' || toolName === 'exit_plan_mode' || toolName === 'ExitPlanMode') && (
-                    <TouchableOpacity
-                        style={[
-                            styles.button,
-                            isPending && styles.buttonAllowAll,
-                            isApprovedViaAllEdits && styles.buttonSelected,
-                            (isDenied || isApprovedViaAllow || isApprovedForSession) && styles.buttonInactive
-                        ]}
-                        onPress={handleApproveAllEdits}
-                        disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
-                        activeOpacity={isPending ? 0.7 : 1}
-                    >
-                        {loadingAllEdits && isPending ? (
-                            <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
-                                <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllowAll.color} />
-                            </View>
-                        ) : (
-                            <View style={styles.buttonContent}>
-                                <Text style={[
-                                    styles.buttonText,
-                                    isPending && styles.buttonTextAllowAll,
-                                    isApprovedViaAllEdits && styles.buttonTextSelected
-                                ]} numberOfLines={1} ellipsizeMode="tail">
-                                    {t('claude.permissions.yesAllowAllEdits')}
-                                </Text>
-                            </View>
-                        )}
-                    </TouchableOpacity>
-                )}
+                        {/* Allow all edits button (downgrade option) */}
+                        <TouchableOpacity
+                            style={[
+                                styles.button,
+                                isPending && styles.buttonAllowAll,
+                                isApprovedViaAllEdits && styles.buttonSelected,
+                                (isDenied || isApprovedViaBypas) && styles.buttonInactive
+                            ]}
+                            onPress={() => handleApproveExitPlan('acceptEdits')}
+                            disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                            activeOpacity={isPending ? 0.7 : 1}
+                        >
+                            {loadingAllEdits && isPending ? (
+                                <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllowAll.color} />
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContent}>
+                                    <Text style={[
+                                        styles.buttonText,
+                                        isPending && styles.buttonTextAllowAll,
+                                        isApprovedViaAllEdits && styles.buttonTextSelected
+                                    ]} numberOfLines={1} ellipsizeMode="tail">
+                                        {t('claude.permissions.yesAllowAllEdits')}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+                    </>
+                ) : isExitPlan ? (
+                    <>
+                        {/* Yes button (restores pre-plan mode) */}
+                        <TouchableOpacity
+                            style={[
+                                styles.button,
+                                isPending && styles.buttonAllow,
+                                isApprovedViaAllow && styles.buttonSelected,
+                                (isDenied || isApprovedViaAllEdits) && styles.buttonInactive
+                            ]}
+                            onPress={() => handleApproveExitPlan(prePlanMode || 'default')}
+                            disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                            activeOpacity={isPending ? 0.7 : 1}
+                        >
+                            {loadingButton === 'allow' && isPending ? (
+                                <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllow.color} />
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContent}>
+                                    <Text style={[
+                                        styles.buttonText,
+                                        isPending && styles.buttonTextAllow,
+                                        isApprovedViaAllow && styles.buttonTextSelected
+                                    ]} numberOfLines={1} ellipsizeMode="tail">
+                                        {t('common.yes')}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
 
-                {/* Allow for session button - only show for non-edit, non-exit-plan tools */}
-                {toolName && toolName !== 'Edit' && toolName !== 'MultiEdit' && toolName !== 'Write' && toolName !== 'NotebookEdit' && toolName !== 'exit_plan_mode' && toolName !== 'ExitPlanMode' && (
-                    <TouchableOpacity
-                        style={[
-                            styles.button,
-                            isPending && styles.buttonForSession,
-                            isApprovedForSession && styles.buttonSelected,
-                            (isDenied || isApprovedViaAllow || isApprovedViaAllEdits) && styles.buttonInactive
-                        ]}
-                        onPress={handleApproveForSession}
-                        disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
-                        activeOpacity={isPending ? 0.7 : 1}
-                    >
-                        {loadingForSession && isPending ? (
-                            <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
-                                <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorForSession.color} />
-                            </View>
-                        ) : (
-                            <View style={styles.buttonContent}>
-                                <Text style={[
-                                    styles.buttonText,
-                                    isPending && styles.buttonTextForSession,
-                                    isApprovedForSession && styles.buttonTextSelected
-                                ]} numberOfLines={1} ellipsizeMode="tail">
-                                    {t('claude.permissions.yesForTool')}
-                                </Text>
-                            </View>
+                        {/* Allow all edits button */}
+                        <TouchableOpacity
+                            style={[
+                                styles.button,
+                                isPending && styles.buttonAllowAll,
+                                isApprovedViaAllEdits && styles.buttonSelected,
+                                (isDenied || isApprovedViaAllow) && styles.buttonInactive
+                            ]}
+                            onPress={() => handleApproveExitPlan('acceptEdits')}
+                            disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                            activeOpacity={isPending ? 0.7 : 1}
+                        >
+                            {loadingAllEdits && isPending ? (
+                                <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllowAll.color} />
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContent}>
+                                    <Text style={[
+                                        styles.buttonText,
+                                        isPending && styles.buttonTextAllowAll,
+                                        isApprovedViaAllEdits && styles.buttonTextSelected
+                                    ]} numberOfLines={1} ellipsizeMode="tail">
+                                        {t('claude.permissions.yesAllowAllEdits')}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+                    </>
+                ) : (
+                    <>
+                        {/* Standard Yes button */}
+                        <TouchableOpacity
+                            style={[
+                                styles.button,
+                                isPending && styles.buttonAllow,
+                                isApprovedViaAllow && styles.buttonSelected,
+                                (isDenied || isApprovedViaAllEdits || isApprovedForSession) && styles.buttonInactive
+                            ]}
+                            onPress={handleApprove}
+                            disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                            activeOpacity={isPending ? 0.7 : 1}
+                        >
+                            {loadingButton === 'allow' && isPending ? (
+                                <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllow.color} />
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContent}>
+                                    <Text style={[
+                                        styles.buttonText,
+                                        isPending && styles.buttonTextAllow,
+                                        isApprovedViaAllow && styles.buttonTextSelected
+                                    ]} numberOfLines={1} ellipsizeMode="tail">
+                                        {t('common.yes')}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+
+                        {/* Allow All Edits button - only show for Edit tools */}
+                        {(toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write' || toolName === 'NotebookEdit') && (
+                            <TouchableOpacity
+                                style={[
+                                    styles.button,
+                                    isPending && styles.buttonAllowAll,
+                                    isApprovedViaAllEdits && styles.buttonSelected,
+                                    (isDenied || isApprovedViaAllow || isApprovedForSession) && styles.buttonInactive
+                                ]}
+                                onPress={handleApproveAllEdits}
+                                disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                                activeOpacity={isPending ? 0.7 : 1}
+                            >
+                                {loadingAllEdits && isPending ? (
+                                    <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                        <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorAllowAll.color} />
+                                    </View>
+                                ) : (
+                                    <View style={styles.buttonContent}>
+                                        <Text style={[
+                                            styles.buttonText,
+                                            isPending && styles.buttonTextAllowAll,
+                                            isApprovedViaAllEdits && styles.buttonTextSelected
+                                        ]} numberOfLines={1} ellipsizeMode="tail">
+                                            {t('claude.permissions.yesAllowAllEdits')}
+                                        </Text>
+                                    </View>
+                                )}
+                            </TouchableOpacity>
                         )}
-                    </TouchableOpacity>
+
+                        {/* Allow for session button - only show for non-edit tools */}
+                        {toolName && toolName !== 'Edit' && toolName !== 'MultiEdit' && toolName !== 'Write' && toolName !== 'NotebookEdit' && (
+                            <TouchableOpacity
+                                style={[
+                                    styles.button,
+                                    isPending && styles.buttonForSession,
+                                    isApprovedForSession && styles.buttonSelected,
+                                    (isDenied || isApprovedViaAllow || isApprovedViaAllEdits) && styles.buttonInactive
+                                ]}
+                                onPress={handleApproveForSession}
+                                disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
+                                activeOpacity={isPending ? 0.7 : 1}
+                            >
+                                {loadingForSession && isPending ? (
+                                    <View style={[styles.buttonContent, { width: 40, height: 20, justifyContent: 'center' }]}>
+                                        <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={styles.loadingIndicatorForSession.color} />
+                                    </View>
+                                ) : (
+                                    <View style={styles.buttonContent}>
+                                        <Text style={[
+                                            styles.buttonText,
+                                            isPending && styles.buttonTextForSession,
+                                            isApprovedForSession && styles.buttonTextSelected
+                                        ]} numberOfLines={1} ellipsizeMode="tail">
+                                            {t('claude.permissions.yesForTool')}
+                                        </Text>
+                                    </View>
+                                )}
+                            </TouchableOpacity>
+                        )}
+                    </>
                 )}
 
                 <TouchableOpacity

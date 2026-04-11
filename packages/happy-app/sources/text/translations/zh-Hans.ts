@@ -781,6 +781,7 @@ export const zhHans: TranslationStructure = {
         // Claude permission dialog buttons
         permissions: {
             yesAllowAllEdits: '是，允许本次会话的所有编辑',
+            yesBypassPermissions: '是，跳过所有权限',
             yesForTool: '是，不再询问此工具',
             noTellClaude: '否，提供反馈',
         }

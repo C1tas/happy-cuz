@@ -781,6 +781,7 @@ export const ja: TranslationStructure = {
         // Claude permission dialog buttons
         permissions: {
             yesAllowAllEdits: 'はい、このセッション中のすべての編集を許可',
+            yesBypassPermissions: 'はい、権限を省略',
             yesForTool: "はい、このツールについては確認しない",
             noTellClaude: 'いいえ、フィードバックを提供',
         }
