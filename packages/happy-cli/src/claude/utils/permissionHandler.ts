@@ -42,6 +42,8 @@ export class PermissionHandler {
     private allowedBashLiterals = new Set<string>();
     private allowedBashPrefixes = new Set<string>();
     private permissionMode: PermissionMode = 'default';
+    /** Mode saved before plan mode entry, restored on ExitPlanMode approval */
+    private prePlanMode: PermissionMode | null = null;
     private onPermissionRequestCallback?: (toolCallId: string) => void;
 
     constructor(session: Session) {
@@ -57,6 +59,10 @@ export class PermissionHandler {
     }
 
     handleModeChange(mode: PermissionMode) {
+        // Save the current mode before entering plan so it can be restored on ExitPlanMode
+        if (mode === 'plan' && this.permissionMode !== 'plan' && this.prePlanMode === null) {
+            this.prePlanMode = this.permissionMode;
+        }
         this.permissionMode = mode;
     }
 
@@ -79,25 +85,25 @@ export class PermissionHandler {
             });
         }
 
-        // Update permission mode
-        if (response.mode) {
+        // Update permission mode (but not for ExitPlanMode — we restore prePlanMode instead)
+        if (response.mode && pending.toolName !== 'exit_plan_mode' && pending.toolName !== 'ExitPlanMode') {
             this.permissionMode = response.mode;
         }
 
-        // Handle 
+        // Handle
         if (pending.toolName === 'exit_plan_mode' || pending.toolName === 'ExitPlanMode') {
             // Handle exit_plan_mode specially
             logger.debug('Plan mode result received', response);
             if (response.approved) {
                 logger.debug('Plan approved - injecting PLAN_FAKE_RESTART');
-                // Inject the approval message at the beginning of the queue
-                if (response.mode && ['default', 'acceptEdits', 'bypassPermissions'].includes(response.mode)) {
-                    this.session.queue.unshift(PLAN_FAKE_RESTART, { permissionMode: response.mode });
-                } else {
-                    this.session.queue.unshift(PLAN_FAKE_RESTART, { permissionMode: 'default' });
-                }
+                // Restore the mode that was active before plan mode entry
+                const restoredMode = this.prePlanMode ?? 'default';
+                this.permissionMode = restoredMode;
+                this.prePlanMode = null;
+                this.session.queue.unshift(PLAN_FAKE_RESTART, { permissionMode: restoredMode });
                 pending.resolve({ behavior: 'deny', message: PLAN_FAKE_REJECT });
             } else {
+                this.prePlanMode = null;
                 pending.resolve({ behavior: 'deny', message: response.reason || 'Plan rejected' });
             }
         } else {
@@ -156,7 +162,11 @@ export class PermissionHandler {
         // Handle special cases
         //
 
-        if (this.permissionMode === 'bypassPermissions') {
+        if (this.permissionMode === 'bypassPermissions' || this.permissionMode === 'yolo') {
+            return { behavior: 'allow', updatedInput: input as Record<string, unknown> };
+        }
+
+        if (this.permissionMode === 'safe-yolo' && !descriptor.edit) {
             return { behavior: 'allow', updatedInput: input as Record<string, unknown> };
         }
 
@@ -358,6 +368,7 @@ export class PermissionHandler {
         this.allowedTools.clear();
         this.allowedBashLiterals.clear();
         this.allowedBashPrefixes.clear();
+        this.prePlanMode = null;
 
         // Cancel all pending requests
         for (const [, pending] of this.pendingRequests.entries()) {

@@ -710,7 +710,7 @@ export const zhHans: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Codex 和 Claude Code 移动客户端',
+        title: 'CUZ 构建的 Codex 和 Claude Code 移动客户端',
         subtitle: '端到端加密，您的账户仅存储在您的设备上。',
         createAccount: '创建账户',
         linkOrRestoreAccount: '链接或恢复账户',

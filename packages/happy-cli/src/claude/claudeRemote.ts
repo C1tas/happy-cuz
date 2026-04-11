@@ -28,6 +28,8 @@ export async function claudeRemote(opts: {
     hookSettingsPath: string,
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime,
+    /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
+    remoteColor?: boolean,
 
     // Dynamic parameters
     nextMessage: () => Promise<{ message: string, mode: EnhancedMode } | null>,
@@ -131,6 +133,11 @@ export async function claudeRemote(opts: {
             return resolve(join(projectPath(), 'scripts', 'claude_remote_launcher.cjs'));
         })(),
         settingsPath: opts.hookSettingsPath,
+        env: opts.remoteColor ? undefined : {
+            NO_COLOR: '1',
+            FORCE_COLOR: '0',
+            TERM: 'dumb',
+        },
     }
 
     // Track thinking state

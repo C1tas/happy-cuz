@@ -35,7 +35,17 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     let messageBuffer = new MessageBuffer();
     let inkInstance: any = null;
 
+    // Alternate screen buffer management for clean terminal isolation
+    let restoreScreen: (() => void) | null = null;
+
     if (hasTTY) {
+        // Enter alternate screen buffer — isolates all Ink output from local mode history
+        if (!session.noAltScreen) {
+            process.stdout.write('\x1b[?1049h');
+            restoreScreen = () => process.stdout.write('\x1b[?1049l');
+            process.on('exit', restoreScreen);
+        }
+
         console.clear();
         inkInstance = render(React.createElement(RemoteModeDisplay, {
             messageBuffer,
@@ -353,6 +363,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     mcpServers: session.mcpServers,
                     hookSettingsPath: session.hookSettingsPath,
                     jsRuntime: session.jsRuntime,
+                    remoteColor: session.remoteColor,
                     canCallTool: permissionHandler.handleToolCall,
                     isAborted: (toolCallId: string) => {
                         return permissionHandler.isAborted(toolCallId);
@@ -478,6 +489,13 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             inkInstance.unmount();
         }
         messageBuffer.clear();
+
+        // Leave alternate screen buffer — restores local mode terminal history
+        if (restoreScreen) {
+            process.removeListener('exit', restoreScreen);
+            restoreScreen();
+            restoreScreen = null;
+        }
 
         // Resolve abort future
         if (abortFuture) { // Just in case of error

@@ -1,4 +1,5 @@
 const { getDefaultConfig } = require("expo/metro-config");
+const os = require("os");
 
 const config = getDefaultConfig(__dirname, {
   // Enable CSS support for web
@@ -19,5 +20,21 @@ config.transformer.getTransformOptions = async () => ({
     inlineRequires: true, // Critical for @shopify/react-native-skia
   },
 });
+
+// Auto-detect LAN IP so remote devices (Android via adb, browsers on other machines)
+// can connect to the Metro dev server's WebSocket without hardcoding localhost.
+// This replaces the need for manual REACT_NATIVE_PACKAGER_HOSTNAME or --host flags.
+if (!process.env.REACT_NATIVE_PACKAGER_HOSTNAME) {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        process.env.REACT_NATIVE_PACKAGER_HOSTNAME = iface.address;
+        break;
+      }
+    }
+    if (process.env.REACT_NATIVE_PACKAGER_HOSTNAME) break;
+  }
+}
 
 module.exports = config;

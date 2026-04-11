@@ -49,7 +49,7 @@ ENV NODE_ENV=production
 COPY --from=builder /repo/node_modules /repo/node_modules
 COPY --from=builder /repo/packages/happy-wire /repo/packages/happy-wire
 COPY --from=builder /repo/packages/happy-server /repo/packages/happy-server
-
+COPY --from=builder /repo/prisma ./prisma
 # Expose the port the app will run on
 EXPOSE 3000
 

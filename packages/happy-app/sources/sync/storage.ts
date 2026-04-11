@@ -56,6 +56,8 @@ interface SessionMessages {
     messagesMap: Record<string, Message>;
     reducerState: ReducerState;
     isLoaded: boolean;
+    hasOlderMessages: boolean;
+    isLoadingOlder: boolean;
 }
 
 // Machine type is now imported from storageTypes - represents persisted machine data
@@ -105,7 +107,9 @@ interface StorageState {
     applyLoaded: () => void;
     applyReady: () => void;
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean };
-    applyMessagesLoaded: (sessionId: string) => void;
+    applyMessagesLoaded: (sessionId: string, hasOlderMessages?: boolean) => void;
+    applyOlderMessages: (sessionId: string, messages: NormalizedMessage[], hasMore: boolean) => void;
+    setLoadingOlder: (sessionId: string, loading: boolean) => void;
     applySettings: (settings: Settings, version: number) => void;
     applySettingsLocal: (settings: Partial<Settings>) => void;
     applyLocalSettings: (settings: Partial<LocalSettings>) => void;
@@ -442,7 +446,9 @@ export const storage = create<StorageState>()((set, get) => {
                         messages: messagesArray,
                         messagesMap: mergedMessagesMap,
                         reducerState: existingSessionMessages.reducerState, // The reducer modifies state in-place, so this has the updates
-                        isLoaded: existingSessionMessages.isLoaded
+                        isLoaded: existingSessionMessages.isLoaded,
+                        hasOlderMessages: existingSessionMessages.hasOlderMessages,
+                        isLoadingOlder: existingSessionMessages.isLoadingOlder
                     };
 
                     // IMPORTANT: Copy latestUsage from reducerState to Session for immediate availability
@@ -519,7 +525,9 @@ export const storage = create<StorageState>()((set, get) => {
                     messages: [],
                     messagesMap: {},
                     reducerState: createReducer(),
-                    isLoaded: false
+                    isLoaded: false,
+                    hasOlderMessages: true,
+                    isLoadingOlder: false
                 };
 
                 // Get the session's agentState if available
@@ -601,7 +609,7 @@ export const storage = create<StorageState>()((set, get) => {
 
             return { changed: Array.from(changed), hasReadyEvent };
         },
-        applyMessagesLoaded: (sessionId: string) => set((state) => {
+        applyMessagesLoaded: (sessionId: string, hasOlderMessages?: boolean) => set((state) => {
             const existingSession = state.sessionMessages[sessionId];
             let result: StorageState;
 
@@ -651,7 +659,9 @@ export const storage = create<StorageState>()((set, get) => {
                             reducerState,
                             messages,
                             messagesMap,
-                            isLoaded: true
+                            isLoaded: true,
+                            hasOlderMessages: hasOlderMessages ?? true,
+                            isLoadingOlder: false
                         } satisfies SessionMessages
                     }
                 };
@@ -662,13 +672,61 @@ export const storage = create<StorageState>()((set, get) => {
                         ...state.sessionMessages,
                         [sessionId]: {
                             ...existingSession,
-                            isLoaded: true
+                            isLoaded: true,
+                            ...(hasOlderMessages !== undefined && { hasOlderMessages })
                         } satisfies SessionMessages
                     }
                 };
             }
 
             return result;
+        }),
+        applyOlderMessages: (sessionId: string, messages: NormalizedMessage[], hasMore: boolean) => set((state) => {
+            const existingSession = state.sessionMessages[sessionId];
+            if (!existingSession) return state;
+
+            // Run older messages through reducer from a fresh state since they precede existing messages
+            const freshReducer = createReducer();
+            const reducerResult = reducer(freshReducer, messages, null);
+            const processedMessages = reducerResult.messages;
+
+            // Merge into existing messagesMap (duplicates handled by id-based map)
+            const mergedMessagesMap = { ...existingSession.messagesMap };
+            processedMessages.forEach(message => {
+                mergedMessagesMap[message.id] = message;
+            });
+
+            const messagesArray = Object.values(mergedMessagesMap)
+                .sort((a, b) => b.createdAt - a.createdAt);
+
+            return {
+                ...state,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        ...existingSession,
+                        messages: messagesArray,
+                        messagesMap: mergedMessagesMap,
+                        hasOlderMessages: hasMore,
+                        isLoadingOlder: false
+                    } satisfies SessionMessages
+                }
+            };
+        }),
+        setLoadingOlder: (sessionId: string, loading: boolean) => set((state) => {
+            const existingSession = state.sessionMessages[sessionId];
+            if (!existingSession) return state;
+
+            return {
+                ...state,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        ...existingSession,
+                        isLoadingOlder: loading
+                    } satisfies SessionMessages
+                }
+            };
         }),
         applySettingsLocal: (settings: Partial<Settings>) => set((state) => {
             saveSettings(applySettings(state.settings, settings), state.settingsVersion ?? 0);
@@ -1159,12 +1217,14 @@ export function useSession(id: string): Session | null {
 
 const emptyArray: unknown[] = [];
 
-export function useSessionMessages(sessionId: string): { messages: Message[], isLoaded: boolean } {
+export function useSessionMessages(sessionId: string): { messages: Message[], isLoaded: boolean, hasOlderMessages: boolean, isLoadingOlder: boolean } {
     return storage(useShallow((state) => {
         const session = state.sessionMessages[sessionId];
         return {
             messages: session?.messages ?? emptyArray,
-            isLoaded: session?.isLoaded ?? false
+            isLoaded: session?.isLoaded ?? false,
+            hasOlderMessages: session?.hasOlderMessages ?? false,
+            isLoadingOlder: session?.isLoadingOlder ?? false
         };
     }));
 }

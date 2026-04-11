@@ -175,6 +175,8 @@ export interface QueryOptions {
     canCallTool?: CanCallToolCallback
     /** Path to a settings JSON file to pass to Claude via --settings */
     settingsPath?: string
+    /** Extra environment variables for the spawned Claude process (does not mutate parent process.env) */
+    env?: Record<string, string>
 }
 
 /**

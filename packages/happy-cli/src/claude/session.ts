@@ -21,6 +21,10 @@ export class Session {
     readonly hookSettingsPath: string;
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     readonly jsRuntime: JsRuntime;
+    /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
+    readonly remoteColor: boolean;
+    /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
+    readonly noAltScreen: boolean;
 
     sessionId: string | null;
     mode: 'local' | 'remote' = 'local';
@@ -49,6 +53,10 @@ export class Session {
         hookSettingsPath: string,
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
+        /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
+        remoteColor?: boolean,
+        /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
+        noAltScreen?: boolean,
     }) {
         this.path = opts.path;
         this.api = opts.api;
@@ -64,6 +72,8 @@ export class Session {
         this._onModeChange = opts.onModeChange;
         this.hookSettingsPath = opts.hookSettingsPath;
         this.jsRuntime = opts.jsRuntime ?? 'node';
+        this.remoteColor = opts.remoteColor ?? false;
+        this.noAltScreen = opts.noAltScreen ?? false;
 
         // Start keep alive
         this.client.keepAlive(this.thinking, this.mode);

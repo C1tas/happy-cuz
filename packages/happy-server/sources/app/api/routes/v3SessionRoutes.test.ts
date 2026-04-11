@@ -127,12 +127,18 @@ const {
         if (typeof args?.where?.seq?.gt === "number") {
             rows = rows.filter((message) => message.seq > args.where.seq.gt);
         }
+        if (typeof args?.where?.seq?.lt === "number") {
+            rows = rows.filter((message) => message.seq < args.where.seq.lt);
+        }
         if (Array.isArray(args?.where?.localId?.in)) {
             const localIds = new Set(args.where.localId.in);
             rows = rows.filter((message) => localIds.has(message.localId));
         }
         if (args?.orderBy?.seq === "asc") {
             rows.sort((a, b) => a.seq - b.seq);
+        }
+        if (args?.orderBy?.seq === "desc") {
+            rows.sort((a, b) => b.seq - a.seq);
         }
         if (args?.orderBy?.createdAt === "desc") {
             rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -310,6 +316,46 @@ describe("v3SessionRoutes", () => {
         });
         const body3 = page3.json();
         expect(body3.messages.map((message: any) => message.seq)).toEqual([5]);
+        expect(body3.hasMore).toBe(false);
+    });
+
+    it("supports backward pagination with before_seq", async () => {
+        seedSession({ id: "session-1", accountId: "user-1" });
+        for (let seq = 1; seq <= 5; seq += 1) {
+            seedMessage({ sessionId: "session-1", seq, localId: `l${seq}`, content: { t: "encrypted", c: String(seq) } });
+        }
+
+        app = await createApp();
+
+        // Get the latest 2 messages (before_seq=very large = get newest)
+        const page1 = await app.inject({
+            method: "GET",
+            url: "/v3/sessions/session-1/messages?before_seq=999999&limit=2",
+            headers: { "x-user-id": "user-1" }
+        });
+        const body1 = page1.json();
+        // Messages returned in ascending order
+        expect(body1.messages.map((message: any) => message.seq)).toEqual([4, 5]);
+        expect(body1.hasMore).toBe(true);
+
+        // Get messages older than seq 4
+        const page2 = await app.inject({
+            method: "GET",
+            url: "/v3/sessions/session-1/messages?before_seq=4&limit=2",
+            headers: { "x-user-id": "user-1" }
+        });
+        const body2 = page2.json();
+        expect(body2.messages.map((message: any) => message.seq)).toEqual([2, 3]);
+        expect(body2.hasMore).toBe(true);
+
+        // Get messages older than seq 2
+        const page3 = await app.inject({
+            method: "GET",
+            url: "/v3/sessions/session-1/messages?before_seq=2&limit=2",
+            headers: { "x-user-id": "user-1" }
+        });
+        const body3 = page3.json();
+        expect(body3.messages.map((message: any) => message.seq)).toEqual([1]);
         expect(body3.hasMore).toBe(false);
     });
 

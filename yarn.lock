@@ -4579,13 +4579,6 @@
   resolved "https://registry.yarnpkg.com/@types/parse-path/-/parse-path-7.0.3.tgz#cec2da2834ab58eb2eb579122d9a1fc13bd7ef36"
   integrity sha512-LriObC2+KYZD3FzCrgWGv/qufdUy4eXrxcLgQMfYXgPbLIecKIsVBaQgUPmxSSLcjmYbDTQbMgr6qr6l/eb7Bg==
 
-"@types/ps-list@^6.2.1":
-  version "6.2.1"
-  resolved "https://registry.yarnpkg.com/@types/ps-list/-/ps-list-6.2.1.tgz#4547c2f4dcf32e6a2358f64f0f208066acfbfa89"
-  integrity sha512-YGrVUmLaAu89QffaehCcCp5kphlbCf72+vDxnRyP1soC9y7xaatnoB0Fgo/tEGHk8teglcLwY6b4iHcyd/UWFA==
-  dependencies:
-    ps-list "*"
-
 "@types/qrcode-terminal@^0.12.2":
   version "0.12.2"
   resolved "https://registry.yarnpkg.com/@types/qrcode-terminal/-/qrcode-terminal-0.12.2.tgz#8d7de3aa41f2d3c724bbc74a157ef3209abf8c75"
@@ -11667,11 +11660,6 @@ proxy-from-env@^1.1.0:
   version "1.1.0"
   resolved "https://registry.yarnpkg.com/proxy-from-env/-/proxy-from-env-1.1.0.tgz#e102f16ca355424865755d2c9e8ea4f24d58c3e2"
   integrity sha512-D+zkORCbA9f1tdWRK0RaCR3GPv50cMxcrz4X8k5LTSUD1Dkw47mKJEZQNunItRTkWwgtaUSo1RVFRIG9ZXiFYg==
-
-ps-list@*:
-  version "9.0.0"
-  resolved "https://registry.yarnpkg.com/ps-list/-/ps-list-9.0.0.tgz#82c678036a237a995eda5872acc39d97fd95a7e1"
-  integrity sha512-lxMEoIL/BQlk2KunFzxwUPwMvjFH7x7cmvzSLsSHpyMXl9FFfLUlfKrYwFc4wx/ZaIxxuXC4n8rjQ1CX/tkXVQ==
 
 ps-list@^8.1.1:
   version "8.1.1"

@@ -5,6 +5,8 @@ import { Purchases, purchasesDefaults, purchasesParse } from './purchases';
 import { Profile, profileDefaults, profileParse } from './profile';
 import type { PermissionModeKey } from '@/components/PermissionModeSelector';
 
+import { messageCache } from './messageCache';
+
 const mmkv = new MMKV();
 const NEW_SESSION_DRAFT_KEY = 'new-session-draft-v1';
 const REGISTERED_PUSH_TOKEN_KEY = 'registered-push-token-v1';
@@ -282,4 +284,5 @@ export function resetVoiceLocalCounters() {
 
 export function clearPersistence() {
     mmkv.clearAll();
+    messageCache.clearAll();
 }

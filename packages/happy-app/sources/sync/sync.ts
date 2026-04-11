@@ -50,6 +50,7 @@ import { fetchFeed } from './apiFeed';
 import { FeedItem } from './feedTypes';
 import { UserProfile } from './friendTypes';
 import { resolveMessageModeMeta } from './messageMeta';
+import { messageCache } from './messageCache';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -88,6 +89,7 @@ class Sync {
     private sendSync = new Map<string, InvalidateSync>();
     private sendAbortControllers = new Map<string, AbortController>();
     private sessionLastSeq = new Map<string, number>();
+    private sessionOldestSeq = new Map<string, number>();
     private pendingOutbox = new Map<string, OutboxMessage[]>();
     private sessionMessageQueue = new Map<string, NormalizedMessage[]>();
     private sessionQueueProcessing = new Set<string>();
@@ -1618,55 +1620,304 @@ class Sync {
                 throw new Error(`Session encryption not ready for ${sessionId}`);
             }
 
-            let afterSeq = this.sessionLastSeq.get(sessionId) ?? 0;
-            let hasMore = true;
-            let totalNormalized = 0;
+            const existingLastSeq = this.sessionLastSeq.get(sessionId);
+            const existingOldestSeq = this.sessionOldestSeq.get(sessionId);
+            const isFirstLoad = existingLastSeq === undefined;
 
-            while (hasMore) {
-                const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?after_seq=${afterSeq}&limit=100`);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch messages for ${sessionId}: ${response.status}`);
-                }
-                const data = await response.json() as V3GetSessionMessagesResponse;
-                const messages = Array.isArray(data.messages) ? data.messages : [];
+            if (isFirstLoad) {
+                // Try loading from local cache first
+                const cached = messageCache.load(sessionId);
 
-                let maxSeq = afterSeq;
-                for (const message of messages) {
-                    if (message.seq > maxSeq) {
-                        maxSeq = message.seq;
+                if (cached && cached.messages.length > 0) {
+                    // Cache hit: display cached messages immediately
+                    log.log(`💬 fetchMessages: cache hit for ${sessionId}, ${cached.messages.length} cached messages`);
+                    const cachedNormalized: NormalizedMessage[] = [];
+                    for (const cm of cached.messages) {
+                        const normalized = normalizeRawMessage(cm.id, cm.localId, cm.createdAt, cm.content);
+                        if (normalized) cachedNormalized.push(normalized);
                     }
-                }
-
-                const decryptedMessages = await encryption.decryptMessages(messages);
-                const normalizedMessages: NormalizedMessage[] = [];
-                for (let i = 0; i < decryptedMessages.length; i++) {
-                    const decrypted = decryptedMessages[i];
-                    if (!decrypted) {
-                        continue;
+                    if (cachedNormalized.length > 0) {
+                        this.enqueueMessages(sessionId, cachedNormalized);
                     }
-                    const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
-                    if (normalized) {
-                        normalizedMessages.push(normalized);
+                    this.sessionLastSeq.set(sessionId, cached.lastSeq);
+                    this.sessionOldestSeq.set(sessionId, cached.oldestSeq);
+                    // Conservatively assume there are older messages beyond cache
+                    storage.getState().applyMessagesLoaded(sessionId, true);
+
+                    // Incremental sync: fetch only messages newer than cache
+                    let afterSeq = cached.lastSeq;
+                    let hasMore = true;
+                    let totalNew = 0;
+                    while (hasMore) {
+                        const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?after_seq=${afterSeq}&limit=100`);
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch messages for ${sessionId}: ${response.status}`);
+                        }
+                        const data = await response.json() as V3GetSessionMessagesResponse;
+                        const messages = Array.isArray(data.messages) ? data.messages : [];
+
+                        let maxSeq = afterSeq;
+                        for (const message of messages) {
+                            if (message.seq > maxSeq) maxSeq = message.seq;
+                        }
+
+                        const decryptedMessages = await encryption.decryptMessages(messages);
+                        const normalizedMessages: NormalizedMessage[] = [];
+                        for (let i = 0; i < decryptedMessages.length; i++) {
+                            const decrypted = decryptedMessages[i];
+                            if (!decrypted) continue;
+                            const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
+                            if (normalized) normalizedMessages.push(normalized);
+                        }
+
+                        if (normalizedMessages.length > 0) {
+                            totalNew += normalizedMessages.length;
+                            this.enqueueMessages(sessionId, normalizedMessages);
+                        }
+
+                        // Cache new messages
+                        messageCache.save(sessionId, decryptedMessages.filter((d): d is NonNullable<typeof d> => d !== null));
+
+                        this.sessionLastSeq.set(sessionId, maxSeq);
+                        hasMore = !!data.hasMore;
+                        if (hasMore && maxSeq === afterSeq) {
+                            log.log(`💬 fetchMessages: pagination stalled for ${sessionId}, stopping`);
+                            break;
+                        }
+                        afterSeq = maxSeq;
                     }
+
+                    storage.getState().applyMessagesLoaded(sessionId);
+                    log.log(`💬 fetchMessages: cache + incremental for ${sessionId} - ${totalNew} new messages`);
+
+                    // Schedule consistency recheck
+                    setTimeout(() => this.recheckMessages(sessionId), 5000);
+                } else {
+                    // No cache: fetch from server (original path)
+                    log.log(`💬 fetchMessages: initial load for ${sessionId}, fetching recent messages`);
+                    const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?before_seq=999999999&limit=50`);
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch messages for ${sessionId}: ${response.status}`);
+                    }
+                    const data = await response.json() as V3GetSessionMessagesResponse;
+                    const messages = Array.isArray(data.messages) ? data.messages : [];
+
+                    let maxSeq = 0;
+                    let minSeq = Infinity;
+                    for (const message of messages) {
+                        if (message.seq > maxSeq) maxSeq = message.seq;
+                        if (message.seq < minSeq) minSeq = message.seq;
+                    }
+
+                    const decryptedMessages = await encryption.decryptMessages(messages);
+                    const normalizedMessages: NormalizedMessage[] = [];
+                    for (let i = 0; i < decryptedMessages.length; i++) {
+                        const decrypted = decryptedMessages[i];
+                        if (!decrypted) continue;
+                        const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
+                        if (normalized) normalizedMessages.push(normalized);
+                    }
+
+                    if (normalizedMessages.length > 0) {
+                        this.enqueueMessages(sessionId, normalizedMessages);
+                    }
+
+                    // Cache the fetched messages
+                    messageCache.save(sessionId, decryptedMessages.filter((d): d is NonNullable<typeof d> => d !== null));
+
+                    if (messages.length > 0) {
+                        this.sessionLastSeq.set(sessionId, maxSeq);
+                        this.sessionOldestSeq.set(sessionId, minSeq);
+                    } else {
+                        this.sessionLastSeq.set(sessionId, 0);
+                        this.sessionOldestSeq.set(sessionId, 0);
+                    }
+
+                    storage.getState().applyMessagesLoaded(sessionId, data.hasMore);
+                    log.log(`💬 fetchMessages: initial load for ${sessionId} completed - ${normalizedMessages.length} messages, hasMore=${data.hasMore}`);
+                }
+            } else if (existingOldestSeq !== undefined && existingOldestSeq > 0) {
+                // Subsequent refresh: fetch only new messages since last known seq (incremental)
+                let afterSeq = existingLastSeq;
+                let hasMore = true;
+                let totalNormalized = 0;
+
+                while (hasMore) {
+                    const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?after_seq=${afterSeq}&limit=100`);
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch messages for ${sessionId}: ${response.status}`);
+                    }
+                    const data = await response.json() as V3GetSessionMessagesResponse;
+                    const messages = Array.isArray(data.messages) ? data.messages : [];
+
+                    let maxSeq = afterSeq;
+                    for (const message of messages) {
+                        if (message.seq > maxSeq) maxSeq = message.seq;
+                    }
+
+                    const decryptedMessages = await encryption.decryptMessages(messages);
+                    const normalizedMessages: NormalizedMessage[] = [];
+                    for (let i = 0; i < decryptedMessages.length; i++) {
+                        const decrypted = decryptedMessages[i];
+                        if (!decrypted) continue;
+                        const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
+                        if (normalized) normalizedMessages.push(normalized);
+                    }
+
+                    if (normalizedMessages.length > 0) {
+                        totalNormalized += normalizedMessages.length;
+                        this.enqueueMessages(sessionId, normalizedMessages);
+                    }
+
+                    // Cache incremental messages
+                    messageCache.save(sessionId, decryptedMessages.filter((d): d is NonNullable<typeof d> => d !== null));
+
+                    this.sessionLastSeq.set(sessionId, maxSeq);
+                    hasMore = !!data.hasMore;
+                    if (hasMore && maxSeq === afterSeq) {
+                        log.log(`💬 fetchMessages: pagination stalled for ${sessionId}, stopping to avoid infinite loop`);
+                        break;
+                    }
+                    afterSeq = maxSeq;
                 }
 
-                if (normalizedMessages.length > 0) {
-                    totalNormalized += normalizedMessages.length;
-                    this.enqueueMessages(sessionId, normalizedMessages);
-                }
+                storage.getState().applyMessagesLoaded(sessionId);
+                log.log(`💬 fetchMessages: incremental refresh for ${sessionId} completed - ${totalNormalized} new messages`);
+            } else {
+                // No messages in session or already fully loaded
+                storage.getState().applyMessagesLoaded(sessionId);
+                log.log(`💬 fetchMessages: no new messages for ${sessionId}`);
+            }
+        });
+    }
 
-                this.sessionLastSeq.set(sessionId, maxSeq);
-                hasMore = !!data.hasMore;
-                if (hasMore && maxSeq === afterSeq) {
-                    log.log(`💬 fetchMessages: pagination stalled for ${sessionId}, stopping to avoid infinite loop`);
-                    break;
-                }
-                afterSeq = maxSeq;
+    private fetchOlderMessages = async (sessionId: string) => {
+        log.log(`💬 fetchOlderMessages starting for session ${sessionId}`);
+        const lock = this.getSessionMessageLock(sessionId);
+        await lock.inLock(async () => {
+            const encryption = this.encryption.getSessionEncryption(sessionId);
+            if (!encryption) {
+                log.log(`💬 fetchOlderMessages: Session encryption not ready for ${sessionId}`);
+                return;
             }
 
-            storage.getState().applyMessagesLoaded(sessionId);
-            log.log(`💬 fetchMessages completed for session ${sessionId} - processed ${totalNormalized} messages`);
+            const oldestSeq = this.sessionOldestSeq.get(sessionId);
+            if (oldestSeq === undefined || oldestSeq <= 0) {
+                log.log(`💬 fetchOlderMessages: no older messages to fetch for ${sessionId}`);
+                storage.getState().applyOlderMessages(sessionId, [], false);
+                return;
+            }
+
+            // Check cache for older messages before hitting network
+            const cached = messageCache.load(sessionId);
+            if (cached && cached.oldestSeq < oldestSeq) {
+                const olderCached = cached.messages.filter(m => m.seq < oldestSeq);
+                if (olderCached.length > 0) {
+                    // Take up to 50 oldest-first (sorted desc, take last 50, reverse)
+                    const batch = olderCached.slice(-50);
+                    const normalizedMessages: NormalizedMessage[] = [];
+                    for (const cm of batch) {
+                        const normalized = normalizeRawMessage(cm.id, cm.localId, cm.createdAt, cm.content);
+                        if (normalized) normalizedMessages.push(normalized);
+                    }
+
+                    const newOldestSeq = batch[0].seq;
+                    this.sessionOldestSeq.set(sessionId, newOldestSeq);
+
+                    // There may be more beyond cache — conservatively assume yes if cache doesn't start at seq 1
+                    const hasMore = newOldestSeq > 1;
+                    storage.getState().applyOlderMessages(sessionId, normalizedMessages, hasMore);
+                    log.log(`💬 fetchOlderMessages: served ${normalizedMessages.length} messages from cache for ${sessionId}`);
+                    return;
+                }
+            }
+
+            // No cache or cache exhausted — fetch from server
+            const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?before_seq=${oldestSeq}&limit=50`);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch older messages for ${sessionId}: ${response.status}`);
+            }
+            const data = await response.json() as V3GetSessionMessagesResponse;
+            const messages = Array.isArray(data.messages) ? data.messages : [];
+
+            let minSeq = oldestSeq;
+            for (const message of messages) {
+                if (message.seq < minSeq) minSeq = message.seq;
+            }
+
+            const decryptedMessages = await encryption.decryptMessages(messages);
+            const normalizedMessages: NormalizedMessage[] = [];
+            for (let i = 0; i < decryptedMessages.length; i++) {
+                const decrypted = decryptedMessages[i];
+                if (!decrypted) continue;
+                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
+                if (normalized) normalizedMessages.push(normalized);
+            }
+
+            // Cache fetched older messages
+            messageCache.save(sessionId, decryptedMessages.filter((d): d is NonNullable<typeof d> => d !== null));
+
+            if (messages.length > 0) {
+                this.sessionOldestSeq.set(sessionId, minSeq);
+            }
+
+            storage.getState().applyOlderMessages(sessionId, normalizedMessages, !!data.hasMore);
+            log.log(`💬 fetchOlderMessages completed for ${sessionId} - ${normalizedMessages.length} older messages, hasMore=${data.hasMore}`);
         });
+    }
+
+    loadOlderMessages = async (sessionId: string) => {
+        const sessionMessages = storage.getState().sessionMessages[sessionId];
+        if (!sessionMessages || sessionMessages.isLoadingOlder || !sessionMessages.hasOlderMessages) {
+            return;
+        }
+        storage.getState().setLoadingOlder(sessionId, true);
+        try {
+            await this.fetchOlderMessages(sessionId);
+        } catch (error) {
+            log.log(`💬 loadOlderMessages failed for ${sessionId}: ${error}`);
+            storage.getState().setLoadingOlder(sessionId, false);
+        }
+    }
+
+    /**
+     * Consistency recheck: verify local messages match server state.
+     * Fetches the latest 20 messages from server and compares with local seq tracking.
+     * If mismatch detected, triggers incremental sync to catch up.
+     */
+    private recheckMessages = async (sessionId: string) => {
+        try {
+            const lock = this.getSessionMessageLock(sessionId);
+            await lock.inLock(async () => {
+                const encryption = this.encryption.getSessionEncryption(sessionId);
+                if (!encryption) return;
+
+                const localLastSeq = this.sessionLastSeq.get(sessionId);
+                if (localLastSeq === undefined) return;
+
+                const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?before_seq=999999999&limit=20`);
+                if (!response.ok) return;
+
+                const data = await response.json() as V3GetSessionMessagesResponse;
+                const messages = Array.isArray(data.messages) ? data.messages : [];
+                if (messages.length === 0) return;
+
+                let serverMaxSeq = 0;
+                for (const message of messages) {
+                    if (message.seq > serverMaxSeq) serverMaxSeq = message.seq;
+                }
+
+                if (serverMaxSeq > localLastSeq) {
+                    // Server has newer messages — trigger incremental sync
+                    log.log(`💬 recheckMessages: server has newer messages for ${sessionId} (server=${serverMaxSeq}, local=${localLastSeq}), triggering sync`);
+                    this.getMessagesSync(sessionId).invalidate();
+                } else {
+                    log.log(`💬 recheckMessages: ${sessionId} is consistent (server=${serverMaxSeq}, local=${localLastSeq})`);
+                }
+            });
+        } catch {
+            // Recheck is best-effort — silently ignore errors
+        }
     }
 
     private registerPushToken = async () => {
@@ -1793,6 +2044,12 @@ class Sync {
                     if (lastMessage && currentLastSeq !== undefined && incomingSeq === currentLastSeq + 1) {
                         this.enqueueMessages(updateData.body.sid, [lastMessage]);
                         this.sessionLastSeq.set(updateData.body.sid, incomingSeq);
+
+                        // Cache the new message (debounced — streaming messages batch naturally)
+                        if (decrypted && decrypted.seq !== null) {
+                            messageCache.save(updateData.body.sid, [decrypted]);
+                        }
+
                         let hasMutableTool = false;
                         if (lastMessage.role === 'agent' && lastMessage.content[0] && lastMessage.content[0].type === 'tool-result') {
                             hasMutableTool = storage.getState().isMutableToolCall(updateData.body.sid, lastMessage.content[0].tool_use_id);
@@ -1831,9 +2088,11 @@ class Sync {
             this.sendSync.delete(sessionId);
             this.pendingOutbox.delete(sessionId);
             this.sessionLastSeq.delete(sessionId);
+            this.sessionOldestSeq.delete(sessionId);
             this.sessionMessageLocks.delete(sessionId);
             this.sessionMessageQueue.delete(sessionId);
             this.sessionQueueProcessing.delete(sessionId);
+            messageCache.clearSession(sessionId);
 
             log.log(`🗑️ Session ${sessionId} deleted from local storage`);
         } else if (updateData.body.t === 'update-session') {

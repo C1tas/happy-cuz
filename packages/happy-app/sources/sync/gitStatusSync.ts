@@ -109,6 +109,11 @@ export class GitStatusSync {
                 return;
             }
 
+            // Skip RPC if session CLI is not connected
+            if (session.presence !== 'online') {
+                return;
+            }
+
             // First check if we're in a git repository
             const gitCheckResult = await sessionBash(sessionId, {
                 command: 'git rev-parse --is-inside-work-tree',
@@ -137,7 +142,7 @@ export class GitStatusSync {
             });
 
             if (!statusResult.success) {
-                console.error('Failed to get git status:', statusResult.error);
+                // RPC failure is expected when CLI disconnects between calls
                 return;
             }
 
@@ -172,8 +177,7 @@ export class GitStatusSync {
             }
 
         } catch (error) {
-            console.error('Error fetching git status for session', sessionId, ':', error);
-            // Don't apply error state, just skip this update
+            // RPC errors are expected when session CLI disconnects — silently skip
         }
     }
 

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useSession, useSessionMessages } from "@/sync/storage";
-import { ActivityIndicator, FlatList, Platform, View } from 'react-native';
+import { ActivityIndicator, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, View } from 'react-native';
 import { useCallback } from 'react';
 import { useHeaderHeight } from '@/utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,14 +8,17 @@ import { MessageView } from './MessageView';
 import { Metadata, Session } from '@/sync/storageTypes';
 import { ChatFooter } from './ChatFooter';
 import { Message } from '@/sync/typesMessage';
+import { sync } from '@/sync/sync';
 
 export const ChatList = React.memo((props: { session: Session }) => {
-    const { messages } = useSessionMessages(props.session.id);
+    const { messages, hasOlderMessages, isLoadingOlder } = useSessionMessages(props.session.id);
     return (
         <ChatListInternal
             metadata={props.session.metadata}
             sessionId={props.session.id}
             messages={messages}
+            hasOlderMessages={hasOlderMessages}
+            isLoadingOlder={isLoadingOlder}
         />
     )
 });
@@ -33,15 +36,56 @@ const ListFooter = React.memo((props: { sessionId: string }) => {
     )
 });
 
+const LoadOlderIndicator = React.memo((props: { isLoading: boolean }) => {
+    if (!props.isLoading) return null;
+    return (
+        <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+            <ActivityIndicator size="small" color="#999" />
+        </View>
+    );
+});
+
+/** Distance from scroll edge (in dp) to trigger loading older messages */
+const LOAD_THRESHOLD = 200;
+
 const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
     sessionId: string,
     messages: Message[],
+    hasOlderMessages: boolean,
+    isLoadingOlder: boolean,
 }) => {
     const keyExtractor = useCallback((item: any) => item.id, []);
     const renderItem = useCallback(({ item }: { item: any }) => (
         <MessageView message={item} metadata={props.metadata} sessionId={props.sessionId} />
     ), [props.metadata, props.sessionId]);
+
+    const tryLoadOlder = useCallback(() => {
+        if (props.hasOlderMessages && !props.isLoadingOlder) {
+            sync.loadOlderMessages(props.sessionId);
+        }
+    }, [props.sessionId, props.hasOlderMessages, props.isLoadingOlder]);
+
+    // onEndReached works reliably on iOS for inverted lists.
+    // On Android it's unreliable, so we use onScroll to detect proximity to the top.
+    const handleEndReached = useCallback(() => {
+        if (Platform.OS !== 'android') {
+            tryLoadOlder();
+        }
+    }, [tryLoadOlder]);
+
+    const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+        if (Platform.OS !== 'android' || !props.hasOlderMessages || props.isLoadingOlder) return;
+        // In inverted FlatList, scrollY measures distance from the bottom edge.
+        // When user scrolls toward older messages (top of visual list), scrollY increases.
+        // Distance from the "end" (top of visual list) = contentHeight - layoutHeight - scrollY
+        const { contentSize, layoutMeasurement, contentOffset } = e.nativeEvent;
+        const distanceFromTop = contentSize.height - layoutMeasurement.height - contentOffset.y;
+        if (distanceFromTop < LOAD_THRESHOLD) {
+            tryLoadOlder();
+        }
+    }, [props.hasOlderMessages, props.isLoadingOlder, tryLoadOlder]);
+
     return (
         <FlatList
             data={props.messages}
@@ -55,7 +99,19 @@ const ChatListInternal = React.memo((props: {
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
             renderItem={renderItem}
             ListHeaderComponent={<ListFooter sessionId={props.sessionId} />}
-            ListFooterComponent={<ListHeader />}
+            ListFooterComponent={
+                <View>
+                    <LoadOlderIndicator isLoading={props.isLoadingOlder} />
+                    <ListHeader />
+                </View>
+            }
+            onEndReached={props.hasOlderMessages ? handleEndReached : undefined}
+            onEndReachedThreshold={0.5}
+            onScroll={Platform.OS === 'android' ? handleScroll : undefined}
+            removeClippedSubviews={false}
+            windowSize={5}
+            maxToRenderPerBatch={8}
+            initialNumToRender={12}
         />
     )
 });

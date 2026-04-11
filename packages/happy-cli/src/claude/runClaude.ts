@@ -43,6 +43,10 @@ export interface StartOptions {
     noSandbox?: boolean
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
+    /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
+    remoteColor?: boolean
+    /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
+    noAltScreen?: boolean
 }
 
 export async function runClaude(credentials: Credentials, options: StartOptions = {}): Promise<void> {
@@ -245,7 +249,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     // Import MessageQueue2 and create message queue
     const messageQueue = new MessageQueue2<EnhancedMode>(mode => hashObject({
-        isPlan: mode.permissionMode === 'plan',
+        permissionMode: mode.permissionMode,
         model: mode.model,
         fallbackModel: mode.fallbackModel,
         customSystemPrompt: mode.customSystemPrompt,
@@ -474,7 +478,9 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         claudeArgs: options.claudeArgs,
         sandboxConfig,
         hookSettingsPath,
-        jsRuntime: options.jsRuntime
+        jsRuntime: options.jsRuntime,
+        remoteColor: options.remoteColor,
+        noAltScreen: options.noAltScreen,
     });
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak

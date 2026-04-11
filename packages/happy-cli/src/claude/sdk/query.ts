@@ -340,7 +340,10 @@ export function query(config: {
 
     // Spawn Claude Code process
     // Use clean env for global claude to avoid local node_modules/.bin taking precedence
-    const spawnEnv = isCommandOnly ? getCleanEnv() : process.env
+    const baseEnv = isCommandOnly ? getCleanEnv() : process.env
+    const spawnEnv = config.options?.env
+        ? { ...baseEnv, ...config.options.env }
+        : baseEnv
     logDebug(`Spawning Claude Code process: ${spawnCommand} ${spawnArgs.join(' ')} (using ${isCommandOnly ? 'clean' : 'normal'} env)`)
 
     const child = spawn(spawnCommand, spawnArgs, {

@@ -708,7 +708,7 @@ export const en = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Codex and Claude Code mobile client',
+        title: 'Codex and Claude Code mobile client built by CUZ',
         subtitle: 'End-to-end encrypted and your account is stored only on your device.',
         createAccount: 'Create account',
         linkOrRestoreAccount: 'Link or restore account',

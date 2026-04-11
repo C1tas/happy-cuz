@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { DropdownMenu, DropdownMenuItem } from '@expo/ui/jetpack-compose';
+import { DropdownMenu, DropdownMenuItem, Text } from '@expo/ui/jetpack-compose';
 import { useSessionQuickActions } from '@/hooks/useSessionQuickActions';
 import { Session } from '@/sync/storageTypes';
 import { t } from '@/text';
@@ -34,23 +34,23 @@ export function SessionActionsNativeMenu({
         <DropdownMenu>
             <DropdownMenu.Items>
                 <DropdownMenuItem onClick={openDetails}>
-                    <DropdownMenuItem.Text>Details</DropdownMenuItem.Text>
+                    <DropdownMenuItem.Text><Text>Details</Text></DropdownMenuItem.Text>
                 </DropdownMenuItem>
-                {canArchive && (
+                {canArchive ? (
                     <DropdownMenuItem onClick={archiveSession}>
-                        <DropdownMenuItem.Text>Archive</DropdownMenuItem.Text>
+                        <DropdownMenuItem.Text><Text>Archive</Text></DropdownMenuItem.Text>
                     </DropdownMenuItem>
-                )}
-                {canShowResume && (
+                ) : null}
+                {canShowResume ? (
                     <DropdownMenuItem onClick={resumeSession}>
-                        <DropdownMenuItem.Text>Resume</DropdownMenuItem.Text>
+                        <DropdownMenuItem.Text><Text>Resume</Text></DropdownMenuItem.Text>
                     </DropdownMenuItem>
-                )}
-                {canCopySessionMetadata && (
+                ) : null}
+                {canCopySessionMetadata ? (
                     <DropdownMenuItem onClick={copySessionMetadata}>
-                        <DropdownMenuItem.Text>{t('sessionInfo.copyMetadata')}</DropdownMenuItem.Text>
+                        <DropdownMenuItem.Text><Text>{t('sessionInfo.copyMetadata')}</Text></DropdownMenuItem.Text>
                     </DropdownMenuItem>
-                )}
+                ) : null}
             </DropdownMenu.Items>
             <DropdownMenu.Trigger>{children}</DropdownMenu.Trigger>
         </DropdownMenu>

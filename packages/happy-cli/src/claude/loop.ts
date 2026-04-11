@@ -42,6 +42,10 @@ interface LoopOptions {
     hookSettingsPath: string
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
+    /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
+    remoteColor?: boolean
+    /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
+    noAltScreen?: boolean
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -62,7 +66,9 @@ export async function loop(opts: LoopOptions): Promise<number> {
         sandboxConfig: opts.sandboxConfig,
         onModeChange: opts.onModeChange,
         hookSettingsPath: opts.hookSettingsPath,
-        jsRuntime: opts.jsRuntime
+        jsRuntime: opts.jsRuntime,
+        remoteColor: opts.remoteColor,
+        noAltScreen: opts.noAltScreen,
     });
 
     opts.onSessionReady?.(session)

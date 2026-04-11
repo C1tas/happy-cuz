@@ -613,6 +613,10 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
       } else if (arg === '--no-chrome') {
         chromeOverride = false
         // Happy-specific flag to disable chrome even if default is on
+      } else if (arg === '--remote-color') {
+        options.remoteColor = true
+      } else if (arg === '--no-alt-screen') {
+        options.noAltScreen = true
       } else if (arg === '--settings') {
         // Intercept --settings flag - Happy uses this internally for session hooks
         const settingsValue = args[++i] // consume the value
@@ -650,7 +654,8 @@ ${chalk.bold('happy')} - Claude Code On the Go
 ${chalk.bold('Usage:')}
   happy [options]         Start Claude with mobile control
   happy auth              Manage authentication
-  happy resume            Resume a previous Happy session by Happy session ID
+  happy resume            Resume a previous Happy session (with options menu)
+  happy resume --no-menu  Resume without interactive options menu
   happy codex             Start Codex mode
   happy gemini            Start Gemini mode (ACP)
   happy acp               Start a generic ACP-compatible agent
@@ -669,6 +674,8 @@ ${chalk.bold('Examples:')}
   happy --chrome           Enable Chrome browser access for this session
   happy --no-chrome        Disable Chrome even if default is on
   happy --no-sandbox       Disable Happy sandbox for this session
+  happy --remote-color     Keep color output in remote mode (default: suppressed)
+  happy --no-alt-screen    Disable alternate screen buffer in remote mode
   happy --js-runtime bun   Use bun instead of node to spawn Claude Code
   happy --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
                            Use a custom API endpoint (e.g., claude-code-router)

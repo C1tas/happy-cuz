@@ -1,7 +1,10 @@
 import { existsSync } from 'node:fs';
+import React from 'react';
+import { render } from 'ink';
 
 import type { Metadata } from '@/api/types';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
+import { ResumeOptionsSelector, type ResumeOptions } from '@/ui/ink/ResumeOptionsSelector';
 
 import { resolveHappySession, type ResumableHappySession } from './resolveHappySession';
 
@@ -13,26 +16,34 @@ export type ResumeLaunch = {
 export type ResumeLaunchOptions = {
     claudeStartingMode?: 'local' | 'remote';
     startedBy?: 'daemon' | 'terminal';
+    yolo?: boolean;
+    remoteColor?: boolean;
+    noAltScreen?: boolean;
 };
 
-export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; sessionId: string } {
+export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; sessionId: string; skipMenu: boolean } {
     if (args.includes('-h') || args.includes('--help')) {
         return {
             showHelp: true,
             sessionId: '',
+            skipMenu: false,
         };
     }
 
-    if (args.length === 0) {
+    const skipMenu = args.includes('--no-menu');
+    const filtered = args.filter(a => a !== '--no-menu');
+
+    if (filtered.length === 0) {
         throw new Error('Happy session ID is required: happy resume <session-id>');
     }
-    if (args.length > 1) {
-        throw new Error(`Unexpected arguments for happy resume: ${args.slice(1).join(' ')}`);
+    if (filtered.length > 1) {
+        throw new Error(`Unexpected arguments for happy resume: ${filtered.slice(1).join(' ')}`);
     }
 
     return {
         showHelp: false,
-        sessionId: args[0],
+        sessionId: filtered[0],
+        skipMenu,
     };
 }
 
@@ -75,6 +86,15 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
         if (options.startedBy) {
             args.push('--started-by', options.startedBy);
         }
+        if (options.yolo) {
+            args.push('--yolo');
+        }
+        if (options.remoteColor) {
+            args.push('--remote-color');
+        }
+        if (options.noAltScreen) {
+            args.push('--no-alt-screen');
+        }
         args.push('--resume', metadata.claudeSessionId);
         return {
             cwd: metadata.path,
@@ -91,14 +111,50 @@ export function formatResumeHelp(): string {
         '',
         'Usage:',
         '  happy resume <happy-session-id>',
+        '  happy resume <happy-session-id> --no-menu',
+        '',
+        'Options:',
+        '  --no-menu    Skip interactive options menu and resume with defaults',
         '',
         'Examples:',
         '  happy resume cmmij8olq00dp5jcxr3wtbpau',
         '  happy resume cmmij8',
+        '  happy resume cmmij8 --no-menu',
         '',
         'This reuses the saved worktree/path and resumes the underlying agent session',
         'when the backend supports it.',
     ].join('\n');
+}
+
+/**
+ * Display interactive resume options selector and return user choices.
+ * Returns null if user cancels.
+ */
+function selectResumeOptions(sessionId: string): Promise<ResumeOptions | null> {
+    return new Promise((resolve) => {
+        let hasResolved = false;
+
+        const onSelect = (options: ResumeOptions) => {
+            if (!hasResolved) {
+                hasResolved = true;
+                app.unmount();
+                resolve(options);
+            }
+        };
+
+        const onCancel = () => {
+            if (!hasResolved) {
+                hasResolved = true;
+                app.unmount();
+                resolve(null);
+            }
+        };
+
+        const app = render(React.createElement(ResumeOptionsSelector, { sessionId, onSelect, onCancel }), {
+            exitOnCtrlC: false,
+            patchConsole: false
+        });
+    });
 }
 
 function spawnResumeChild(launch: ResumeLaunch): Promise<number | null> {
@@ -128,7 +184,24 @@ export async function handleResumeCommand(args: string[]): Promise<void> {
     }
 
     const session = await resolveHappySession(parsed.sessionId);
-    const launch = buildResumeLaunch(session);
+
+    // Show interactive options menu unless --no-menu
+    let launchOptions: ResumeLaunchOptions = {};
+    if (!parsed.skipMenu && process.stdout.isTTY && process.stdin.isTTY) {
+        const resumeOptions = await selectResumeOptions(session.id);
+        if (!resumeOptions) {
+            console.log('Resume cancelled.');
+            return;
+        }
+        launchOptions = {
+            claudeStartingMode: resumeOptions.startingMode,
+            yolo: resumeOptions.yolo,
+            remoteColor: resumeOptions.remoteColor,
+            noAltScreen: resumeOptions.noAltScreen,
+        };
+    }
+
+    const launch = buildResumeLaunch(session, launchOptions);
 
     if (!existsSync(launch.cwd)) {
         throw new Error(`Saved session path does not exist: ${launch.cwd}`);

@@ -7,6 +7,7 @@ import { type Fastify } from "../types";
 
 const getMessagesQuerySchema = z.object({
     after_seq: z.coerce.number().int().min(0).default(0),
+    before_seq: z.coerce.number().int().min(0).optional(),
     limit: z.coerce.number().int().min(1).max(500).default(100)
 });
 
@@ -59,7 +60,7 @@ export function v3SessionRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { sessionId } = request.params;
-        const { after_seq, limit } = request.query;
+        const { after_seq, before_seq, limit } = request.query;
 
         const session = await db.session.findFirst({
             where: {
@@ -73,6 +74,35 @@ export function v3SessionRoutes(app: Fastify) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
+        // Backward pagination: get messages older than before_seq
+        if (before_seq !== undefined) {
+            const messages = await db.sessionMessage.findMany({
+                where: {
+                    sessionId,
+                    seq: { lt: before_seq }
+                },
+                orderBy: { seq: 'desc' },
+                take: limit + 1,
+                select: {
+                    id: true,
+                    seq: true,
+                    content: true,
+                    localId: true,
+                    createdAt: true,
+                    updatedAt: true
+                }
+            });
+
+            const hasMore = messages.length > limit;
+            const page = hasMore ? messages.slice(0, limit) : messages;
+
+            return reply.send({
+                messages: page.reverse().map(toResponseMessage),
+                hasMore
+            });
+        }
+
+        // Forward pagination: get messages newer than after_seq (original behavior)
         const messages = await db.sessionMessage.findMany({
             where: {
                 sessionId,
