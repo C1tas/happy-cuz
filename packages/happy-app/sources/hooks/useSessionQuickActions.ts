@@ -2,9 +2,9 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionKill } from '@/sync/ops';
+import { machineResumeSession, machineStopSession, sessionKill } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
-import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
+import { storage, useLocalSetting, useMachine } from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
@@ -13,6 +13,7 @@ import { copySessionMetadataToClipboard } from '@/utils/copySessionMetadataToCli
 import { useSessionStatus } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { useRouter } from 'expo-router';
+import { RestartProgressModal, updateRestartStage, requestRestartConfirmation } from '@/components/RestartProgressModal';
 
 interface UseSessionQuickActionsOptions {
     onAfterArchive?: () => void;
@@ -95,6 +96,38 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
     };
 }
 
+type RestartAvailability = {
+    canRestart: boolean;
+    canShowRestart: boolean;
+    subtitle: string;
+};
+
+/**
+ * Restart availability: requires the session to be connected (opposite of resume),
+ * plus the same daemon/machine conditions needed for resume.
+ */
+function getRestartAvailability(session: Session, machine: Machine | null | undefined, _isConnected: boolean): RestartAvailability {
+    const machineId = session.metadata?.machineId;
+    if (!machineId) {
+        return { canRestart: false, canShowRestart: false, subtitle: '' };
+    }
+
+    const hasBackendId = Boolean(session.metadata?.claudeSessionId || session.metadata?.codexThreadId);
+    if (!hasBackendId) {
+        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionMissingBackendId') };
+    }
+
+    if (!machine || !isMachineOnline(machine)) {
+        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionMachineOffline') };
+    }
+
+    if (!machine.metadata?.resumeSupport?.rpcAvailable) {
+        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionNeedsUpdate') };
+    }
+
+    return { canRestart: true, canShowRestart: true, subtitle: t('sessionInfo.restartSessionSubtitle') };
+}
+
 export function useSessionQuickActions(
     session: Session,
     options: UseSessionQuickActionsOptions = {},
@@ -109,10 +142,13 @@ export function useSessionQuickActions(
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
     const devModeEnabled = useLocalSetting('devModeEnabled');
-    const expResumeSession = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
-        () => expResumeSession ? getResumeAvailability(session, machine, sessionStatus.isConnected) : { canResume: false, canShowResume: false, subtitle: '', message: '' },
-        [machine, session, sessionStatus.isConnected, expResumeSession],
+        () => getResumeAvailability(session, machine, sessionStatus.isConnected),
+        [machine, session, sessionStatus.isConnected],
+    );
+    const restartAvailability = React.useMemo(
+        () => getRestartAvailability(session, machine, sessionStatus.isConnected),
+        [machine, session, sessionStatus.isConnected],
     );
 
     const openDetails = React.useCallback(() => {
@@ -179,6 +215,102 @@ export function useSessionQuickActions(
         onAfterArchive?.();
     });
 
+    const [restartingSession, performRestart] = useHappyAction(async () => {
+        console.log('[Restart] Starting restart flow, canRestart:', restartAvailability.canRestart, 'machineId:', machineId);
+        if (!restartAvailability.canRestart || !machineId) {
+            throw new HappyError(restartAvailability.subtitle, false);
+        }
+
+        const modalId = Modal.show({ component: RestartProgressModal });
+        console.log('[Restart] Modal.show called, modalId:', modalId);
+
+        // Yield to allow React to render the modal and register the stageListener
+        // Without this, updateRestartStage fires before the modal mounts and events are lost
+        await new Promise(resolve => setTimeout(resolve, 50));
+        console.log('[Restart] Modal mount delay complete');
+
+        try {
+            // Stage 1: Check if session is active
+            console.log('[Restart] Setting stage: checking, sessionStatus.isConnected:', sessionStatus.isConnected, 'state:', sessionStatus.state);
+            updateRestartStage({ type: 'checking' });
+
+            // If session is actively running, ask user for confirmation
+            if (sessionStatus.isConnected) {
+                console.log('[Restart] Session is connected, requesting confirmation...');
+                const confirmed = await requestRestartConfirmation(sessionStatus.state);
+                console.log('[Restart] Confirmation result:', confirmed);
+                if (!confirmed) {
+                    Modal.hide(modalId);
+                    return;
+                }
+
+                // Stage 2: Stop the running session
+                console.log('[Restart] Stopping session, machineId:', machineId, 'sessionId:', session.id);
+                updateRestartStage({
+                    type: 'stopping',
+                    sessionId: session.id,
+                    pid: session.metadata?.hostPid ?? undefined,
+                });
+                await machineStopSession(machineId, session.id);
+                console.log('[Restart] Session stopped successfully');
+                updateRestartStage({ type: 'stopped', sessionId: session.id });
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+
+            // Stage 3: Resume with new process (reusing same session ID)
+            console.log('[Restart] Starting resume, machineId:', machineId, 'sessionId:', session.id);
+            updateRestartStage({ type: 'starting', sessionId: session.id });
+            const result = await machineResumeSession({ machineId, sessionId: session.id });
+            console.log('[Restart] Resume result:', result.type, result.type === 'success' ? result.sessionId : '');
+
+            if (result.type === 'requestToApproveDirectoryCreation') {
+                throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
+            }
+            if (result.type === 'error') {
+                throw new HappyError(result.errorMessage, false);
+            }
+
+            updateRestartStage({
+                type: 'started',
+                sessionId: session.id,
+                newSessionId: result.sessionId,
+            });
+
+            // Stage 4: Load conversation history
+            console.log('[Restart] Loading conversation history');
+            updateRestartStage({ type: 'loading' });
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await sync.refreshSessions();
+                if (storage.getState().sessions[result.sessionId]) {
+                    break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 150));
+            }
+
+            if (session.permissionMode) {
+                storage.getState().updateSessionPermissionMode(result.sessionId, session.permissionMode);
+            }
+            if (session.modelMode) {
+                storage.getState().updateSessionModelMode(result.sessionId, session.modelMode);
+            }
+
+            Modal.hide(modalId);
+            console.log('[Restart] Complete, navigating to session:', result.sessionId);
+            navigateToSession(result.sessionId);
+        } catch (error) {
+            console.log('[Restart] Error caught:', error instanceof HappyError ? error.message : error);
+            if (error instanceof HappyError) {
+                // Show error in progress modal instead of the default useHappyAction alert
+                updateRestartStage({ type: 'error', message: error.message });
+                // Don't re-throw — let user close the modal manually
+                return;
+            } else {
+                Modal.hide(modalId);
+            }
+            throw error;
+        }
+    });
+
     const archiveSession = React.useCallback(() => {
         performArchive();
     }, [performArchive]);
@@ -187,15 +319,24 @@ export function useSessionQuickActions(
         performResume();
     }, [performResume]);
 
+    const restartSession = React.useCallback(() => {
+        performRestart();
+    }, [performRestart]);
+
     return {
         archiveSession,
         archivingSession,
         canArchive: sessionStatus.isConnected,
         canCopySessionMetadata: __DEV__ || devModeEnabled,
+        canRestart: restartAvailability.canRestart,
+        canShowRestart: restartAvailability.canShowRestart,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,
         copySessionMetadata,
         openDetails,
+        restartSession,
+        restartSessionSubtitle: restartAvailability.subtitle,
+        restartingSession,
         resumeSession,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,
