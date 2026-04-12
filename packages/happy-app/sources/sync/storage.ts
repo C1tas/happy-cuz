@@ -336,9 +336,22 @@ export const storage = create<StorageState>()((set, get) => {
                     (session.permissionMode && session.permissionMode !== 'default' ? session.permissionMode : undefined) ||
                     defaultPermissionMode;
 
+                // Preserve existing agentState when incoming is null
+                // (HTTP list endpoint never includes agentState — it only arrives via WebSocket update-session)
+                const existingAgentState = state.sessions[session.id]?.agentState;
+                const existingAgentStateVersion = state.sessions[session.id]?.agentStateVersion ?? 0;
+
+                if (!session.agentState && existingAgentState) {
+                    console.log(`[agentState] Preserving existing agentState for session ${session.id} (incoming was null, existing has ${Object.keys(existingAgentState.requests || {}).length} requests)`);
+                }
+
                 mergedSessions[session.id] = {
                     ...session,
                     presence,
+                    agentState: session.agentState ?? existingAgentState ?? null,
+                    agentStateVersion: session.agentState
+                        ? session.agentStateVersion
+                        : (existingAgentStateVersion || session.agentStateVersion),
                     draft: existingDraft || savedDraft || session.draft || null,
                     permissionMode: resolvedPermissionMode
                 };

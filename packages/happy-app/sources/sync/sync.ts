@@ -115,6 +115,7 @@ class Sync {
     private backgroundSendTimeout: ReturnType<typeof setTimeout> | null = null;
     private backgroundSendNotificationId: string | null = null;
     private backgroundSendStartedAt: number | null = null;
+    private pendingSessionUpdates = new Map<string, any>(); // Queue update-session events for sessions not yet loaded
     revenueCatInitialized = false;
 
     // Generic locking mechanism
@@ -776,7 +777,11 @@ class Sync {
             let metadata = await sessionEncryption.decryptMetadata(session.metadataVersion, session.metadata);
 
             // Decrypt agent state using session-specific encryption
-            let agentState = await sessionEncryption.decryptAgentState(session.agentStateVersion, session.agentState);
+            // Note: agentState may be null from list endpoint (excluded for response size optimization);
+            // real-time WebSocket updates deliver agentState changes.
+            let agentState = session.agentState
+                ? await sessionEncryption.decryptAgentState(session.agentStateVersion, session.agentState)
+                : null;
 
             // Put it all together
             const processedSession = {
@@ -792,6 +797,17 @@ class Sync {
 
         // Apply to storage
         this.applySessions(decryptedSessions);
+
+        // Replay any update-session events that arrived while fetchSessions was in flight
+        if (this.pendingSessionUpdates.size > 0) {
+            const pending = new Map(this.pendingSessionUpdates);
+            this.pendingSessionUpdates.clear();
+            console.log(`[agentState] Replaying ${pending.size} queued update-session events`);
+            for (const [, update] of pending) {
+                await this.handleUpdate(update);
+            }
+        }
+
         log.log(`📥 fetchSessions completed - processed ${decryptedSessions.length} sessions`);
 
     }
@@ -2134,6 +2150,12 @@ class Sync {
             log.log(`🗑️ Session ${sessionId} deleted from local storage`);
         } else if (updateData.body.t === 'update-session') {
             const session = storage.getState().sessions[updateData.body.id];
+            if (!session) {
+                // Session not yet in storage (fetchSessions still in flight) — queue for replay
+                console.log(`[agentState] update-session queued for unknown session ${updateData.body.id}`);
+                this.pendingSessionUpdates.set(updateData.body.id, updateData);
+                return;
+            }
             if (session) {
                 // Get session encryption
                 const sessionEncryption = this.encryption.getSessionEncryption(updateData.body.id);
@@ -2145,6 +2167,11 @@ class Sync {
                 const agentState = updateData.body.agentState && sessionEncryption
                     ? await sessionEncryption.decryptAgentState(updateData.body.agentState.version, updateData.body.agentState.value)
                     : session.agentState;
+
+                if (updateData.body.agentState) {
+                    console.log(`[agentState] update-session received for ${updateData.body.id} with agentState v${updateData.body.agentState.version}, ${Object.keys(agentState?.requests || {}).length} requests`);
+                }
+
                 const metadata = updateData.body.metadata && sessionEncryption
                     ? await sessionEncryption.decryptMetadata(updateData.body.metadata.version, updateData.body.metadata.value)
                     : session.metadata;
@@ -2461,6 +2488,8 @@ class Sync {
                     compressing: update.compressing ?? false,
                     thinkingAt: update.activeAt, // Always use activeAt for consistency
                     hud: update.hud ?? session.hud ?? null,
+                    cliPermissionMode: update.permissionMode ?? session.cliPermissionMode ?? null,
+                    cliCurrentModel: update.currentModel ?? session.cliCurrentModel ?? null,
                 });
             }
         }
