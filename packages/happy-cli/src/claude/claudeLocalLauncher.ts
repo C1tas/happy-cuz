@@ -76,15 +76,27 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }
 
         // When to abort
-        session.client.rpcHandlerManager.registerHandler('abort', doAbort); // Abort current process, clean queue and switch to remote mode
-        session.client.rpcHandlerManager.registerHandler('switch', doSwitch); // When user wants to switch to remote mode
+        session.client.rpcHandlerManager.registerHandler('abort', async () => {
+            // RPC from mobile app: explicit request overrides local exit lock
+            session.localExitLock = false;
+            await doAbort();
+        });
+        session.client.rpcHandlerManager.registerHandler('switch', async () => {
+            // RPC from mobile app: explicit request overrides local exit lock
+            session.localExitLock = false;
+            await doSwitch();
+        });
         session.queue.setOnMessage((message: string, mode) => {
-            // Switch to remote mode when message received
+            // Queue-driven switch is suppressed while localExitLock is active
+            if (session.localExitLock) {
+                logger.debug('[local]: Ignoring queue message while localExitLock is active');
+                return;
+            }
             doSwitch();
-        }); // When any message is received, abort current process, clean queue and switch to remote mode
+        });
 
-        // Exit if there are messages in the queue
-        if (session.queue.size() > 0) {
+        // Exit if there are messages in the queue (unless locked by local exit)
+        if (session.queue.size() > 0 && !session.localExitLock) {
             return { type: 'switch' };
         }
 
@@ -140,7 +152,9 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     break;
                 }
                 if (!exitReason) {
-                    session.client.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    session.client.sendSessionEvent({ type: 'error', source: 'claude', detail: errorMessage });
+                    session.consumeOneTimeFlags();
                     continue;
                 } else {
                     break;
@@ -153,11 +167,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // Resolve future
         exutFuture.resolve(undefined);
 
+        // Clear local exit lock — no longer in local mode
+        session.localExitLock = false;
+
         // Set handlers to no-op
         session.client.rpcHandlerManager.registerHandler('abort', async () => { });
         session.client.rpcHandlerManager.registerHandler('switch', async () => { });
         session.queue.setOnMessage(null);
-        
+
         // Remove session found callback
         session.removeSessionFoundCallback(scannerSessionCallback);
 

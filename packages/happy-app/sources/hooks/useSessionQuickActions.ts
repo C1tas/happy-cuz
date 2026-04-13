@@ -302,6 +302,12 @@ export function useSessionQuickActions(
             if (error instanceof HappyError) {
                 // Show error in progress modal instead of the default useHappyAction alert
                 updateRestartStage({ type: 'error', message: error.message });
+                // Inject error into session chat for full visibility
+                sync.injectLocalEvent(session.id, {
+                    type: 'error',
+                    source: 'happy',
+                    detail: error.message
+                });
                 // Don't re-throw — let user close the modal manually
                 return;
             } else {

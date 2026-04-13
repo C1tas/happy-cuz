@@ -6,7 +6,7 @@ import React from "react";
 import { claudeRemote } from "./claudeRemote";
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
-import { SDKAssistantMessage, SDKMessage, SDKUserMessage } from "./sdk";
+import { SDKAssistantMessage, SDKMessage, SDKResultMessage, SDKUserMessage } from "./sdk";
 import { formatClaudeMessageForInk } from "@/ui/messageFormatterInk";
 import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
@@ -16,6 +16,8 @@ import { RawJSONLines } from "@/claude/types";
 import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
 import { getToolName } from "./utils/getToolName";
 import { getAskUserQuestionToolCallIds } from "./utils/questionNotification";
+import { detectTerminalCapabilities, buildTerminalResetSequence, buildTransitionResetSequence, buildReassertSequence, DEC } from "@/utils/terminalCapabilities";
+import { appendFileSync, writeFileSync, writeSync } from "node:fs";
 
 interface PermissionsField {
     date: number;
@@ -27,9 +29,24 @@ interface PermissionsField {
 export async function claudeRemoteLauncher(session: Session): Promise<'switch' | 'exit'> {
     logger.debug('[claudeRemoteLauncher] Starting remote launcher');
 
-    // Check if we have a TTY for UI rendering
-    const hasTTY = process.stdout.isTTY && process.stdin.isTTY;
-    logger.debug(`[claudeRemoteLauncher] TTY available: ${hasTTY}`);
+    // Terminal debug logging — writes to /tmp/happy-terminal-debug-{pid}.log
+    const termDebugPath = process.env.HAPPY_TERMINAL_DEBUG
+        ? `/tmp/happy-terminal-debug-${process.pid}.log`
+        : null;
+    const termLog = (msg: string): void => {
+        if (!termDebugPath) return;
+        const line = `[${new Date().toISOString()}] ${msg}\n`;
+        try { appendFileSync(termDebugPath, line); } catch { /* ignore */ }
+    };
+    if (termDebugPath) {
+        writeFileSync(termDebugPath, `[${new Date().toISOString()}] Terminal debug log started (pid: ${process.pid})\n`);
+        termLog(`TTY stdout: ${process.stdout.isTTY}, stdin: ${process.stdin.isTTY}`);
+    }
+
+    // Detect terminal capabilities for adaptive escape sequence usage
+    const caps = detectTerminalCapabilities();
+    const hasTTY = caps.sgr; // If sgr is supported, we have a usable TTY
+    logger.debug(`[claudeRemoteLauncher] TTY available: ${hasTTY}, caps: altScreen=${caps.altScreen} clearScrollback=${caps.clearScrollback} decstr=${caps.decstr}`);
 
     // Configure terminal
     let messageBuffer = new MessageBuffer();
@@ -40,13 +57,37 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
     if (hasTTY) {
         // Enter alternate screen buffer — isolates all Ink output from local mode history
-        if (!session.noAltScreen) {
-            process.stdout.write('\x1b[?1049h');
-            restoreScreen = () => process.stdout.write('\x1b[?1049l');
+        if (caps.altScreen && !session.noAltScreen) {
+            termLog('Entering alternate screen buffer');
+            // Wrap alt screen entry + blank frame in synchronized update to prevent flicker
+            const bsu = caps.synchronizedUpdate ? DEC.BSU : '';
+            const esu = caps.synchronizedUpdate ? DEC.ESU : '';
+            process.stdout.write(bsu + DEC.ENTER_ALT_SCREEN);
+            restoreScreen = () => {
+                try { writeSync(1, DEC.EXIT_ALT_SCREEN); } catch { /* fd 1 may be closed */ }
+            };
             process.on('exit', restoreScreen);
+
+            // Seed blank frame — prevents Ink's diff renderer from producing spurious LF
+            // scrolls due to heightDelta > 0 when prev frame is empty in fresh alt screen.
+            // Writes a full-screen blank + cursor home so Ink's first render has a baseline.
+            const { rows, columns } = process.stdout;
+            if (rows && columns) {
+                const blankLine = ' '.repeat(columns);
+                const blankScreen = Array.from({ length: rows }, () => blankLine).join('\n');
+                process.stdout.write(DEC.CURSOR_HOME + blankScreen + DEC.CURSOR_HOME + esu);
+                termLog(`Seeded blank frame: ${columns}x${rows}`);
+            } else {
+                process.stdout.write(esu);
+            }
         }
 
         console.clear();
+        // Ensure clean terminal state before Ink mount
+        if (caps.sgr) {
+            process.stdout.write(DEC.SGR_RESET + DEC.SHOW_CURSOR);
+        }
+        termLog('Mounting Ink instance');
         inkInstance = render(React.createElement(RemoteModeDisplay, {
             messageBuffer,
             logPath: process.env.DEBUG ? session.logPath : undefined,
@@ -72,10 +113,37 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     if (hasTTY) {
         process.stdin.resume();
         if (process.stdin.isTTY) {
+            termLog('Setting stdin raw mode: true');
             process.stdin.setRawMode(true);
         }
         process.stdin.setEncoding("utf8");
     }
+
+    // Terminal mode reassertion — recovers from state loss after tmux reattach,
+    // SSH reconnect, laptop sleep/wake, or terminal resize
+    const inAltScreen = () => restoreScreen !== null;
+    const reassertModes = () => {
+        if (!hasTTY) return;
+        const seq = buildReassertSequence(caps, inAltScreen());
+        if (seq) {
+            termLog('Reasserting terminal modes after signal');
+            process.stdout.write(seq);
+        }
+        // Re-enter raw mode if it was lost (SIGCONT after SIGTSTP)
+        if (process.stdin.isTTY) {
+            try { process.stdin.setRawMode(true); } catch { /* may fail if stdin closed */ }
+        }
+    };
+    const onSigwinch = () => {
+        termLog('SIGWINCH received — reasserting terminal modes');
+        reassertModes();
+    };
+    const onSigcont = () => {
+        termLog('SIGCONT received — reasserting terminal modes');
+        reassertModes();
+    };
+    process.on('SIGWINCH', onSigwinch);
+    process.on('SIGCONT', onSigcont);
 
     // Handle abort
     let exitReason: 'switch' | 'exit' | null = null;
@@ -99,6 +167,8 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         if (!exitReason) {
             exitReason = 'switch';
         }
+        // Set local exit lock — prevents queue-driven auto-switch back to remote
+        session.localExitLock = true;
         await abort();
     }
 
@@ -132,6 +202,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     let planModeToolCalls = new Set<string>();
     let ongoingToolCalls = new Map<string, { parentToolCallId: string | null }>();
     let notifiedQuestionToolCalls = new Set<string>();
+
+    // Track last SDK error result for error classification in catch block
+    // Uses a mutable wrapper to avoid TS control flow narrowing to `never` in catch blocks
+    const lastError: { result: { subtype: string; detail?: string } | null } = { result: null };
 
     function onMessage(message: SDKMessage) {
 
@@ -319,6 +393,14 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 }
             }
         }
+
+        // Capture SDK error results for classification in catch block
+        if (message.type === 'result') {
+            const resultMsg = message as SDKResultMessage;
+            if (resultMsg.subtype === 'error_during_execution') {
+                lastError.result = { subtype: resultMsg.subtype, detail: resultMsg.result };
+            }
+        }
     }
 
     try {
@@ -364,6 +446,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     hookSettingsPath: session.hookSettingsPath,
                     jsRuntime: session.jsRuntime,
                     remoteColor: session.remoteColor,
+                    suppressEmoji: session.suppressEmoji,
                     canCallTool: permissionHandler.handleToolCall,
                     isAborted: (toolCallId: string) => {
                         return permissionHandler.isAborted(toolCallId);
@@ -413,7 +496,17 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     },
                     onSessionReset: () => {
                         logger.debug('[remote]: Session reset');
+                        // Close current turn (clears subagent tracking)
+                        session.client.closeClaudeSessionTurn('completed');
+                        // Clear internal session ID + local exit lock
                         session.clearSessionId();
+                        // Notify mobile app with structured event
+                        session.client.sendSessionEvent({ type: 'session-cleared' });
+                        // Update metadata — clear claudeSessionId, preserve other fields (codexThreadId, summary, etc.)
+                        session.client.updateMetadata((metadata) => ({
+                            ...metadata,
+                            claudeSessionId: undefined
+                        }));
                     },
                     onReady: () => {
                         session.client.closeClaudeSessionTurn('completed');
@@ -443,7 +536,22 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 logger.debug('[remote]: launch error', e);
                 if (!exitReason) {
                     session.client.closeClaudeSessionTurn('failed');
-                    session.client.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
+
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    let source: 'happy' | 'claude' | 'codex' = 'happy';
+                    let detail = errorMessage;
+
+                    const sdkErrorDetail = lastError.result?.detail;
+                    if (sdkErrorDetail) {
+                        source = 'claude';
+                        detail = sdkErrorDetail;
+                    } else if (errorMessage.includes('Claude Code process exited')) {
+                        source = 'claude';
+                    }
+
+                    session.client.sendSessionEvent({ type: 'error', source, detail });
+                    session.consumeOneTimeFlags(); // Resume fallback: strips --resume flag
+                    lastError.result = null;
                     continue;
                 }
             } finally {
@@ -477,32 +585,118 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             }
         }
     } finally {
+        const isSwitching = exitReason === 'switch';
+
+        termLog(`Cleanup: starting terminal teardown (reason: ${exitReason})`);
+
+        // Remove signal handlers — no longer in remote mode
+        process.removeListener('SIGWINCH', onSigwinch);
+        process.removeListener('SIGCONT', onSigcont);
 
         // Clean up permission handler
         permissionHandler.reset();
 
-        // Reset Terminal
-        process.stdin.off('data', abort);
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(false);
-        }
-        if (inkInstance) {
-            inkInstance.unmount();
-        }
+        // Clear message buffer BEFORE unmounting Ink to prevent final re-render with stale content
         messageBuffer.clear();
 
-        // Leave alternate screen buffer — restores local mode terminal history
-        if (restoreScreen) {
-            process.removeListener('exit', restoreScreen);
-            restoreScreen();
-            restoreScreen = null;
+        // Unmount Ink and wait for cleanup to propagate through the event loop
+        if (inkInstance) {
+            termLog('Cleanup: unmounting Ink instance');
+            inkInstance.unmount();
+            inkInstance = null;
+            await new Promise<void>(resolve => process.nextTick(resolve));
+        }
+
+        if (isSwitching) {
+            // --- SWITCH TO LOCAL MODE ---
+            // Keep raw mode active to prevent keystroke echoing during transition.
+            // The child process (Claude Code) inherits the terminal fd directly
+            // via stdio: ['inherit', ...] and sets its own terminal modes via tcsetattr.
+
+            // Drain Node.js userspace stdin buffer to discard queued raw-mode input
+            process.stdin.read();
+
+            // Leave alternate screen buffer with lightweight attribute reset.
+            // Do NOT clear screen or scrollback — preserve main buffer history.
+            {
+                const bsu = caps.synchronizedUpdate ? DEC.BSU : '';
+                const esu = caps.synchronizedUpdate ? DEC.ESU : '';
+                let cleanupSeq = bsu;
+                let hasContent = false;
+
+                if (restoreScreen) {
+                    termLog('Cleanup: leaving alternate screen buffer (switch)');
+                    process.removeListener('exit', restoreScreen);
+                    restoreScreen = null;
+                    cleanupSeq += DEC.EXIT_ALT_SCREEN;
+                    hasContent = true;
+                }
+
+                const resetSeq = buildTransitionResetSequence(caps);
+                if (resetSeq) {
+                    cleanupSeq += resetSeq;
+                    hasContent = true;
+                }
+
+                cleanupSeq += esu;
+                if (hasContent) {
+                    try { writeSync(1, cleanupSeq); } catch { /* fd 1 may be closed */ }
+                }
+            }
+
+            // Do NOT call setRawMode(false) — child handles terminal state.
+            // Do NOT call process.stdin.resume() — claudeLocal.ts manages stdin lifecycle.
+            termLog('Cleanup: switch path complete (raw mode preserved)');
+
+        } else {
+            // --- EXIT ---
+            // Full cleanup: restore terminal to normal state for the user's shell.
+
+            if (process.stdin.isTTY) {
+                termLog('Cleanup: setting stdin raw mode: false');
+                process.stdin.setRawMode(false);
+            }
+            process.stdin.read();
+            process.stdin.resume();
+
+            // Leave alternate screen buffer and reset terminal
+            {
+                const bsu = caps.synchronizedUpdate ? DEC.BSU : '';
+                const esu = caps.synchronizedUpdate ? DEC.ESU : '';
+                let cleanupSeq = bsu;
+                let hasContent = false;
+
+                if (restoreScreen) {
+                    termLog('Cleanup: leaving alternate screen buffer (exit)');
+                    process.removeListener('exit', restoreScreen);
+                    restoreScreen = null;
+                    cleanupSeq += DEC.EXIT_ALT_SCREEN;
+                    hasContent = true;
+                }
+
+                const resetSeq = buildTerminalResetSequence(caps);
+                if (resetSeq) {
+                    termLog('Cleanup: terminal reset via detected capabilities');
+                    cleanupSeq += resetSeq;
+                    hasContent = true;
+                }
+
+                cleanupSeq += esu;
+                if (hasContent) {
+                    try { writeSync(1, cleanupSeq); } catch { /* fd 1 may be closed */ }
+                }
+            }
+
+            termLog('Cleanup: exit path complete');
         }
 
         // Resolve abort future
-        if (abortFuture) { // Just in case of error
+        if (abortFuture) {
             abortFuture.resolve(undefined);
         }
+        termLog('Cleanup: terminal teardown complete');
     }
 
+    termLog(`Exiting with reason: ${exitReason || 'exit'}`);
     return exitReason || 'exit';
 }

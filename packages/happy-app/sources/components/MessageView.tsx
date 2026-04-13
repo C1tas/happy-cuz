@@ -141,6 +141,13 @@ function AgentEventBlock(props: {
       </View>
     );
   }
+  if (props.event.type === 'error') {
+    return (
+      <View style={styles.agentErrorContainer}>
+        <Text style={styles.agentErrorText}>{props.event.detail}</Text>
+      </View>
+    );
+  }
   return (
     <View style={styles.agentEventContainer}>
       <Text style={styles.agentEventText}>{t('message.unknownEvent')}</Text>
@@ -209,6 +216,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   agentEventText: {
     color: theme.colors.agentEventText,
+    fontSize: 14,
+  },
+  agentErrorContainer: {
+    marginHorizontal: 8,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  agentErrorText: {
+    color: theme.colors.agentErrorText,
     fontSize: 14,
   },
   toolContainer: {

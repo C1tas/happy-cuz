@@ -1,5 +1,7 @@
 # Yolo 模式无法保持问题调查报告
 
+> **状态**: ✅ 根因 1-3 已修复（`cuz` 分支，commit `6fc88a60`）。根因 4（permissionMode 持久化到 agentState）未实施。
+
 ## 问题描述
 
 在 Web 端切换 Claude 为 yolo 模式后，多轮对话中无法保持自动批准状态，工具调用仍需反复确认。即使从 Web 端多次切换 yolo 模式也无法生效。

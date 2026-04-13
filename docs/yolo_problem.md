@@ -1,5 +1,7 @@
 # Yolo 模式 Plan 退出后未恢复问题
 
+> **状态**: ✅ 已修复（`cuz` 分支，commit `6fc88a60`）
+
 ## 问题描述
 
 在 Remote 模式下，如果会话以 Yolo 模式（`--dangerously-skip-permissions` / `bypassPermissions`）启动，当 Claude 自动进入 Plan 模式后，退出 Plan 模式时权限模式无法恢复为 Yolo，而是停留在 `plan` 模式，导致后续所有编辑操作都需要手动审批。

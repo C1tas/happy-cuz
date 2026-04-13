@@ -456,9 +456,13 @@ export class ApiSessionClient extends EventEmitter {
     } | {
         type: 'message', message: string
     } | {
+        type: 'error', source: 'happy' | 'claude' | 'codex', detail: string
+    } | {
         type: 'permission-mode-changed', mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
     } | {
         type: 'ready'
+    } | {
+        type: 'session-cleared'
     }, id?: string) {
         let content = {
             role: 'agent',
@@ -474,7 +478,7 @@ export class ApiSessionClient extends EventEmitter {
     /**
      * Send a ping message to keep the connection alive
      */
-    keepAlive(thinking: boolean, mode: 'local' | 'remote', compressing?: boolean, hud?: import('./types').SessionHudData) {
+    keepAlive(thinking: boolean, mode: 'local' | 'remote', compressing?: boolean, hud?: import('./types').SessionHudData, permissionMode?: import('./types').PermissionMode, currentModel?: string) {
         if (process.env.DEBUG) { // too verbose for production
             logger.debug(`[API] Sending keep alive message: ${thinking}`);
         }
@@ -484,7 +488,9 @@ export class ApiSessionClient extends EventEmitter {
             thinking,
             mode,
             compressing: compressing || false,
-            hud: hud || undefined
+            hud: hud || undefined,
+            permissionMode: permissionMode || undefined,
+            currentModel: currentModel || undefined,
         });
     }
 

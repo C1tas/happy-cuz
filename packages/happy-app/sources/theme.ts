@@ -203,6 +203,7 @@ export const lightTheme = {
         userMessageText: '#000000',
         agentMessageText: '#000000',
         agentEventText: '#666666',
+        agentErrorText: '#FF3B30',
 
         // Code/Syntax colors
         syntaxKeyword: '#1d4ed8',
@@ -413,6 +414,7 @@ export const darkTheme = {
         userMessageText: '#FFFFFF',
         agentMessageText: '#FFFFFF',
         agentEventText: '#8E8E93',
+        agentErrorText: '#FF6B6B',
 
         // Code/Syntax colors (brighter for dark mode)
         syntaxKeyword: '#569CD6',

@@ -379,3 +379,25 @@ This mechanism allows the server and mobile clients to drive local actions witho
 - API clients: `packages/happy-cli/src/api`
 - Persistence: `packages/happy-cli/src/persistence.ts`
 - Config: `packages/happy-cli/src/configuration.ts`
+
+## Resume Command
+
+`happy resume <session-id>` resumes a previous Happy session. By default it shows an interactive Ink menu (`ResumeOptionsSelector.tsx`) where the user can configure:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Starting Mode | `local` | `local` or `remote` |
+| Yolo Mode | OFF | Bypass all permissions |
+| Remote Color | OFF | Keep ANSI color in remote mode |
+| Alt Screen | ON | Use alternate screen buffer in remote mode |
+
+Pass `--no-menu` to skip the interactive menu and use defaults.
+
+## Remote Mode CLI Flags
+
+| Flag | Effect |
+|------|--------|
+| `--remote-color` | Keep color/emoji output in remote mode Claude process (default: suppressed via `NO_COLOR=1 FORCE_COLOR=0 TERM=dumb`) |
+| `--no-alt-screen` | Disable alternate screen buffer in remote mode (default: enabled, isolates remote Ink UI from local terminal history) |
+
+These flags are passed through `loop()` → `Session` → `claudeRemoteLauncher` → `claudeRemote`.

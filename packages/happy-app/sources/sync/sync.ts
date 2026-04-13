@@ -14,7 +14,7 @@ import * as Notifications from 'expo-notifications';
 import { syncCurrentPushToken } from './pushRegistration';
 import { Platform, AppState, type AppStateStatus } from 'react-native';
 import { isRunningOnMac } from '@/utils/platform';
-import { NormalizedMessage, normalizeRawMessage, RawRecord } from './typesRaw';
+import { AgentEvent, NormalizedMessage, normalizeRawMessage, RawRecord } from './typesRaw';
 import { applySettings, Settings, settingsDefaults, settingsParse, SUPPORTED_SCHEMA_VERSION } from './settings';
 import { Profile, profileParse } from './profile';
 import { loadPendingSettings, savePendingSettings } from './persistence';
@@ -539,6 +539,23 @@ class Sync {
 
         this.getSendSync(sessionId).invalidate();
         this.maybeStartBackgroundSendWatchdog();
+    }
+
+    /**
+     * Inject a local-only event message into the session chat.
+     * Creates a NormalizedMessage locally without sending to server.
+     * Used for app-originated events like restart errors.
+     */
+    injectLocalEvent(sessionId: string, event: AgentEvent): void {
+        const id = randomUUID();
+        this.enqueueMessages(sessionId, [{
+            id,
+            localId: null,
+            createdAt: Date.now(),
+            role: 'event',
+            isSidechain: false,
+            content: event
+        }]);
     }
 
     applySettings = (delta: Partial<Settings>) => {

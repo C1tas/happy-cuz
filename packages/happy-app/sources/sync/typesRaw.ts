@@ -24,6 +24,10 @@ const agentEventSchema = z.discriminatedUnion('type', [z.object({
     type: z.literal('message'),
     message: z.string(),
 }), z.object({
+    type: z.literal('error'),
+    source: z.enum(['happy', 'claude', 'codex']),
+    detail: z.string(),
+}), z.object({
     type: z.literal('limit-reached'),
     endsAt: z.number(),
 }), z.object({

@@ -58,6 +58,13 @@ This value is sent in:
 
 ## Claude CLI Resolution
 
+### 0) Automatic default mode
+`packages/happy-cli/src/index.ts`
+
+When no explicit permission flag is provided, CLI auto-appends `--dangerously-skip-permissions`. This ensures remote mode always works without terminal prompts. Explicit flags (`--dangerously-skip-permissions`, `--permission-mode`) take precedence.
+
+For Codex: `packages/happy-cli/src/codex/runCodex.ts` defaults `currentPermissionMode` to `'yolo'`.
+
 ### 1) Startup resolution
 `packages/happy-cli/src/claude/runClaude.ts`
 `packages/happy-cli/src/claude/utils/permissionMode.ts`
@@ -78,10 +85,21 @@ When a user message includes `meta.permissionMode`:
 - If sandbox enabled: forced to `bypassPermissions`
 - If sandbox disabled: use incoming mode
 
+Mode changes take effect at the **turn boundary** — the current SDK query completes, then the loop restarts with the new mode.
+
 ### 3) Local Claude process
 `packages/happy-cli/src/claude/claudeLocal.ts`
 
 If sandbox is enabled, launcher appends `--dangerously-skip-permissions` before spawn.
+
+### 4) Bidirectional sync reporting
+`packages/happy-cli/src/claude/session.ts`
+
+CLI reports its current `permissionMode` and `currentModel` to the server via keepAlive (every 2s). This flows through the ephemeral activity pipeline to the App, stored as `session.cliPermissionMode` and `session.cliCurrentModel`.
+
+**State priority:**
+- **Local mode** (CLI controlled by terminal): CLI state is authoritative. App displays CLI-reported mode passively.
+- **Remote mode** (App controlled): App selections take priority. When App mode differs from CLI-reported mode, badge shows sync indicator until turn boundary restart applies the change.
 
 ## Effective Result Matrix
 
@@ -98,3 +116,31 @@ If sandbox is enabled, launcher appends `--dangerously-skip-permissions` before 
 ## Why this is stable now
 - Client fallback only forces skip-permissions for sandboxed sessions.
 - CLI sandbox policy guarantees sandboxed Claude sessions cannot re-enable permission prompts via message metadata.
+- `yolo` and `safe-yolo` are recognized directly by `PermissionHandler` for auto-approval (no SDK restart needed for immediate effect).
+- Mode hash includes full `permissionMode` (not just `isPlan`), so any mode switch triggers SDK restart.
+- Plan mode preserves `prePlanMode` and restores it on ExitPlanMode approval.
+
+## PermissionHandler Auto-Approval Logic
+
+`packages/happy-cli/src/claude/utils/permissionHandler.ts`
+
+The handler recognizes three auto-approval tiers:
+
+| Mode | Behavior |
+|------|----------|
+| `bypassPermissions` | All tools auto-approved |
+| `yolo` | All tools auto-approved (equivalent to `bypassPermissions`) |
+| `safe-yolo` | Non-edit tools auto-approved; edit tools (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) require explicit approval |
+
+### Plan Mode Preservation
+
+When `handleModeChange('plan')` is called:
+1. If current mode is not already `plan` and `prePlanMode` is null, save current mode as `prePlanMode`
+2. Set `permissionMode = 'plan'`
+
+When ExitPlanMode is approved in `handlePermissionResponse`:
+1. Restore `permissionMode = prePlanMode ?? 'default'`
+2. Clear `prePlanMode`
+3. Inject `PLAN_FAKE_RESTART` with the restored mode
+
+This ensures yolo/bypassPermissions mode is preserved across plan mode cycles. The `prePlanMode` is also cleared on `reset()` (called between SDK spawns).
