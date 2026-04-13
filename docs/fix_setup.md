@@ -242,3 +242,48 @@ ExitPlanMode 审批后，`permissionHandler` 内部正确恢复模式（`this.pe
 - App: `ChatList.tsx`（`forwardRef` + `scrollToBottom` imperative handle）
 - App: `SessionView.tsx`（接线 ref + 回调）
 - App: `AgentInput.tsx`（新增 `onScrollToBottom` prop + `ScrollToBottomButton` 组件）
+
+---
+
+## 13. APK 更新编译与安装流程
+
+**问题**: cuz 分支的所有功能修改（状态栏、plan 同步、scroll-to-bottom、重启 fallback、stdin 守卫等）需要编译为 APK 并部署到真机验证。需要明确 prod-cuz 变体的完整构建链路。
+
+**构建流程**:
+
+### Step 1: Prebuild（生成 Android 原生目录）
+
+```bash
+cd packages/happy-app
+APP_ENV=prod-cuz yarn expo prebuild --platform android --clean
+```
+
+- `--clean` 清除旧的 android 目录后重新生成，确保变体配置一致
+- `APP_ENV=prod-cuz` 选择 prod-cuz 变体（bundle ID `com.c1tas.happycuz`，app name `HappyCUZ`）
+- 输出：`packages/happy-app/android/` 原生工程目录
+
+### Step 2: Gradle assembleRelease（编译 APK）
+
+```bash
+cd packages/happy-app/android
+./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+```
+
+- `-PreactNativeArchitectures=arm64-v8a` 仅编译 arm64，减少体积（~108MB vs ~180MB 全架构）
+- 编译时间约 8 分钟（首次，后续增量更快）
+- 输出：`packages/happy-app/android/app/build/outputs/apk/release/app-release.apk`
+
+### Step 3: ADB 安装
+
+```bash
+adb install -r packages/happy-app/android/app/build/outputs/apk/release/app-release.apk
+```
+
+- `-r` 覆盖安装，保留用户数据
+- 支持 USB 或无线 ADB（`adb connect <ip>:5555`）
+
+**注意事项**:
+- Step 1 和 Step 2 必须顺序执行（prebuild 生成 android 目录后才能 gradle 编译）
+- 切换变体时（如 dev → prod-cuz），必须重新 `prebuild --clean`，原生目录是变体专属的
+- Release APK 使用 debug keystore 签名（非生产签名）
+- 服务端部署（`deploy-server.sh`）与 APK 编译相互独立，可并行执行
