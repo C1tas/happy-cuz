@@ -86,6 +86,7 @@ interface AgentInputProps {
     isSendDisabled?: boolean;
     isSending?: boolean;
     minHeight?: number;
+    onScrollToBottom?: () => void | Promise<void>;
 }
 
 const MAX_CONTEXT_SIZE = 190000;
@@ -295,6 +296,19 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
 }));
 
+const getPermissionColor = (key: string, isSandboxedYolo: boolean, theme: Theme) => {
+    if (isSandboxedYolo) return '#4169E1';
+    switch (key) {
+        case 'acceptEdits': return theme.colors.permission.acceptEdits;
+        case 'bypassPermissions': return theme.colors.permission.bypass;
+        case 'plan': return theme.colors.permission.plan;
+        case 'read-only': return theme.colors.permission.readOnly;
+        case 'safe-yolo': return theme.colors.permission.safeYolo;
+        case 'yolo': return theme.colors.permission.yolo;
+        default: return theme.colors.textSecondary;
+    }
+};
+
 const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme) => {
     const percentageUsed = (contextSize / MAX_CONTEXT_SIZE) * 100;
     const percentageRemaining = Math.max(0, Math.min(100, 100 - percentageUsed));
@@ -363,6 +377,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const contextWarning = props.usageData?.contextSize
         ? getContextWarning(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme)
         : null;
+
+    // Derived permission badge state (extracted from inline IIFE)
+    const cliMode = props.connectionStatus?.cliPermissionMode;
+    const isCliLocal = props.connectionStatus?.isCliLocalMode === true;
+    const effectivePermKey = (isCliLocal && cliMode) ? cliMode : permissionModeKey;
+    const isPermSyncing = !isCliLocal && !!cliMode && cliMode !== permissionModeKey;
+    const isSandboxedEffective = isSandboxEnabled && (effectivePermKey === 'bypassPermissions' || effectivePermKey === 'yolo');
+    const permColor = getPermissionColor(effectivePermKey, isSandboxedEffective, theme);
+    const permIcon: 'play-forward' | 'pause' =
+        effectivePermKey === 'plan' || effectivePermKey === 'read-only' ? 'pause' : 'play-forward';
+    const effectivePermName = (isCliLocal && cliMode && cliMode !== permissionModeKey)
+        ? (availableModes.find(m => m.key === cliMode)?.name ?? cliMode)
+        : (displayPermissionMode?.name ?? '');
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
@@ -843,200 +870,133 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {(props.connectionStatus || contextWarning || (displayPermissionMode && permissionModeKey !== 'default')) && (
                     <View style={{
                         flexDirection: 'row',
+                        flexWrap: 'wrap',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
                         paddingHorizontal: 16,
                         paddingBottom: 4,
-                        minHeight: 20, // Fixed minimum height to prevent jumping
+                        minHeight: 20,
+                        gap: 8,
+                        rowGap: 2,
                     }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
-                            {props.connectionStatus && (
-                                <>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                        <StatusDot
-                                            color={props.connectionStatus.dotColor}
-                                            isPulsing={props.connectionStatus.isPulsing}
-                                            size={6}
-                                        />
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: props.connectionStatus.color,
-                                            ...Typography.default()
-                                        }}>
-                                            {props.connectionStatus.text}
-                                        </Text>
-                                    </View>
-                                    {/* CLI Status - only shown when provided (wizard only) */}
-                                    {props.connectionStatus.cliStatus && (
-                                        <>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.claude
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    {props.connectionStatus.cliStatus.claude ? '✓' : '✗'}
-                                                </Text>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.claude
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    claude
-                                                </Text>
-                                            </View>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.codex
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    {props.connectionStatus.cliStatus.codex ? '✓' : '✗'}
-                                                </Text>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.codex
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    codex
-                                                </Text>
-                                            </View>
-                                            {props.connectionStatus.cliStatus.gemini !== undefined && (
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                    <Text style={{
-                                                        fontSize: 11,
-                                                        color: props.connectionStatus.cliStatus.gemini
-                                                            ? theme.colors.success
-                                                            : theme.colors.textDestructive,
-                                                        ...Typography.default()
-                                                    }}>
-                                                        {props.connectionStatus.cliStatus.gemini ? '✓' : '✗'}
-                                                    </Text>
-                                                    <Text style={{
-                                                        fontSize: 11,
-                                                        color: props.connectionStatus.cliStatus.gemini
-                                                            ? theme.colors.success
-                                                            : theme.colors.textDestructive,
-                                                        ...Typography.default()
-                                                    }}>
-                                                        gemini
-                                                    </Text>
-                                                </View>
-                                            )}
-                                        </>
-                                    )}
-                                </>
-                            )}
-                            {/* HUD segments — model, context%, completed tools */}
-                            {props.hudData && props.connectionStatus && (
-                                <>
-                                    {props.hudData.model && (
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: theme.colors.textSecondary,
-                                            ...Typography.mono()
-                                        }} numberOfLines={1}>
-                                            {props.hudData.model}
-                                        </Text>
-                                    )}
-                                    {props.hudData.contextPercent !== undefined && (
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: props.hudData.contextPercent < 50
-                                                ? theme.colors.success
-                                                : props.hudData.contextPercent < 80
-                                                    ? theme.colors.warning
-                                                    : theme.colors.textDestructive,
-                                            ...Typography.mono()
-                                        }} numberOfLines={1}>
-                                            {Math.round(props.hudData.contextPercent)}%
-                                        </Text>
-                                    )}
-                                    {(props.hudData.completedTools ?? 0) > 0 && (
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: theme.colors.textSecondary,
-                                            ...Typography.mono()
-                                        }} numberOfLines={1}>
-                                            {props.hudData.completedTools}T
-                                        </Text>
-                                    )}
-                                </>
-                            )}
-                            {contextWarning && (
+                        {props.connectionStatus && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <StatusDot
+                                    color={props.connectionStatus.dotColor}
+                                    isPulsing={props.connectionStatus.isPulsing}
+                                    size={6}
+                                />
                                 <Text style={{
                                     fontSize: 11,
-                                    color: contextWarning.color,
-                                    marginLeft: props.connectionStatus ? 8 : 0,
+                                    color: props.connectionStatus.color,
                                     ...Typography.default()
                                 }}>
-                                    {props.connectionStatus ? '• ' : ''}{contextWarning.text}
+                                    {props.connectionStatus.text}
                                 </Text>
-                            )}
-                        </View>
-                        {/* Permission badge — only shown when non-default */}
-                        {displayPermissionMode && permissionModeKey !== 'default' && (() => {
-                            const cliMode = props.connectionStatus?.cliPermissionMode;
-                            const isLocal = props.connectionStatus?.isCliLocalMode === true;
-                            // In local mode, CLI is authoritative — show CLI-reported mode
-                            // In remote mode, App is authoritative — show App-selected mode with sync indicator
-                            const effectiveKey = (isLocal && cliMode) ? cliMode : permissionModeKey;
-                            const isSyncing = !isLocal && !!cliMode && cliMode !== permissionModeKey;
-
-                            const getPermColor = (key: string) => {
-                                const isSandboxedYolo = isSandboxEnabled && (key === 'bypassPermissions' || key === 'yolo');
-                                if (isSandboxedYolo) return '#4169E1';
-                                switch (key) {
-                                    case 'acceptEdits': return theme.colors.permission.acceptEdits;
-                                    case 'bypassPermissions': return theme.colors.permission.bypass;
-                                    case 'plan': return theme.colors.permission.plan;
-                                    case 'read-only': return theme.colors.permission.readOnly;
-                                    case 'safe-yolo': return theme.colors.permission.safeYolo;
-                                    case 'yolo': return theme.colors.permission.yolo;
-                                    default: return theme.colors.textSecondary;
-                                }
-                            };
-                            const permColor = getPermColor(effectiveKey);
-                            const permIcon: 'play-forward' | 'pause' =
-                                effectiveKey === 'plan' || effectiveKey === 'read-only'
-                                    ? 'pause' : 'play-forward';
-
-                            // In local mode with CLI mode override, find the display name from available modes
-                            const effectiveName = (isLocal && cliMode && cliMode !== permissionModeKey)
-                                ? (availableModes.find(m => m.key === cliMode)?.name ?? cliMode)
-                                : displayPermissionMode.name;
-
-                            return (
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Ionicons name={permIcon} size={11} color={permColor} />
+                            </View>
+                        )}
+                        {/* CLI Status - consolidated chip (wizard only) */}
+                        {props.connectionStatus?.cliStatus && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Text style={{
+                                    fontSize: 11,
+                                    color: props.connectionStatus.cliStatus.claude
+                                        ? theme.colors.success
+                                        : theme.colors.textDestructive,
+                                    ...Typography.default()
+                                }}>
+                                    {props.connectionStatus.cliStatus.claude ? '✓' : '✗'} claude
+                                </Text>
+                                <Text style={{
+                                    fontSize: 11,
+                                    color: props.connectionStatus.cliStatus.codex
+                                        ? theme.colors.success
+                                        : theme.colors.textDestructive,
+                                    ...Typography.default()
+                                }}>
+                                    {props.connectionStatus.cliStatus.codex ? '✓' : '✗'} codex
+                                </Text>
+                                {props.connectionStatus.cliStatus.gemini !== undefined && (
                                     <Text style={{
                                         fontSize: 11,
-                                        color: permColor,
+                                        color: props.connectionStatus.cliStatus.gemini
+                                            ? theme.colors.success
+                                            : theme.colors.textDestructive,
                                         ...Typography.default()
                                     }}>
-                                        {withSandboxSuffix(effectiveName, effectiveKey)}
+                                        {props.connectionStatus.cliStatus.gemini ? '✓' : '✗'} gemini
                                     </Text>
-                                    {isSyncing && (
-                                        <Text style={{
-                                            fontSize: 10,
-                                            color: theme.colors.textSecondary,
-                                            opacity: 0.7,
-                                            ...Typography.mono()
-                                        }}>
-                                            (cli:{cliMode})
-                                        </Text>
-                                    )}
-                                </View>
-                            );
-                        })()}
+                                )}
+                            </View>
+                        )}
+                        {/* HUD segments — model, context%, completed tools */}
+                        {props.hudData && props.connectionStatus && (
+                            <>
+                                {props.hudData.model && (
+                                    <Text style={{
+                                        fontSize: 11,
+                                        flexShrink: 1,
+                                        color: theme.colors.textSecondary,
+                                        ...Typography.mono()
+                                    }} numberOfLines={1}>
+                                        {props.hudData.model}
+                                    </Text>
+                                )}
+                                {props.hudData.contextPercent !== undefined && (
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: props.hudData.contextPercent < 50
+                                            ? theme.colors.success
+                                            : props.hudData.contextPercent < 80
+                                                ? theme.colors.warning
+                                                : theme.colors.textDestructive,
+                                        ...Typography.mono()
+                                    }} numberOfLines={1}>
+                                        {Math.round(props.hudData.contextPercent)}%
+                                    </Text>
+                                )}
+                                {(props.hudData.completedTools ?? 0) > 0 && (
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: theme.colors.textSecondary,
+                                        ...Typography.mono()
+                                    }} numberOfLines={1}>
+                                        {props.hudData.completedTools}T
+                                    </Text>
+                                )}
+                            </>
+                        )}
+                        {contextWarning && (
+                            <Text style={{
+                                fontSize: 11,
+                                color: contextWarning.color,
+                                ...Typography.default()
+                            }}>
+                                {contextWarning.text}
+                            </Text>
+                        )}
+                        {/* Spacer to push permission badge right */}
+                        <View style={{ flex: 1, minWidth: 8 }} />
+                        {/* Permission badge — only shown when non-default */}
+                        {displayPermissionMode && permissionModeKey !== 'default' && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <Ionicons name={permIcon} size={11} color={permColor} />
+                                <Text style={{
+                                    fontSize: 11,
+                                    color: permColor,
+                                    ...Typography.default()
+                                }}>
+                                    {withSandboxSuffix(effectivePermName, effectivePermKey)}
+                                </Text>
+                                {isPermSyncing && (
+                                    <Ionicons
+                                        name="sync-outline"
+                                        size={10}
+                                        color={theme.colors.textSecondary}
+                                        style={{ opacity: 0.7 }}
+                                    />
+                                )}
+                            </View>
+                        )}
                     </View>
                 )}
 
@@ -1242,6 +1202,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                                 {/* Git Status Badge */}
                                 <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+
+                                {/* Scroll to bottom button */}
+                                {props.onScrollToBottom && (
+                                    <ScrollToBottomButton onPress={props.onScrollToBottom} />
+                                )}
                                 </View>
 
                                 {/* Send/Voice button - aligned with first row */}
@@ -1318,6 +1283,50 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </View>
     );
 }));
+
+// Scroll to Bottom Button Component
+function ScrollToBottomButton({ onPress }: { onPress: () => void | Promise<void> }) {
+    const { theme } = useUnistyles();
+    const [loading, setLoading] = React.useState(false);
+
+    const handlePress = React.useCallback(async () => {
+        if (loading) return;
+        setLoading(true);
+        hapticsLight();
+        try {
+            await onPress();
+        } finally {
+            setLoading(false);
+        }
+    }, [onPress, loading]);
+
+    return (
+        <Pressable
+            style={(p) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                borderRadius: Platform.select({ default: 16, android: 20 }),
+                paddingHorizontal: 8,
+                paddingVertical: 6,
+                height: 32,
+                opacity: p.pressed ? 0.7 : 1,
+            })}
+            hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+            onPress={handlePress}
+            disabled={loading}
+        >
+            {loading ? (
+                <ActivityIndicator size="small" color={theme.colors.button.secondary.tint} />
+            ) : (
+                <Ionicons
+                    name="arrow-down"
+                    size={16}
+                    color={theme.colors.button.secondary.tint}
+                />
+            )}
+        </Pressable>
+    );
+}
 
 // Git Status Button Component
 function GitStatusButton({ sessionId, onPress }: { sessionId?: string, onPress?: () => void }) {

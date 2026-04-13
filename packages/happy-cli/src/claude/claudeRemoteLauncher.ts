@@ -456,6 +456,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             let p = pending;
                             pending = null;
                             permissionHandler.handleModeChange(p.mode.permissionMode);
+                            session.onPermissionModeChange(p.mode.permissionMode);
                             return p;
                         }
 
@@ -471,6 +472,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             modeHash = msg.hash;
                             mode = msg.mode;
                             permissionHandler.handleModeChange(mode.permissionMode);
+                            session.onPermissionModeChange(mode.permissionMode);
                             return {
                                 message: msg.message,
                                 mode: msg.mode
@@ -599,19 +601,58 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         // Clear message buffer BEFORE unmounting Ink to prevent final re-render with stale content
         messageBuffer.clear();
 
-        // Unmount Ink and wait for cleanup to propagate through the event loop
+        // Unmount Ink and wait for cleanup to propagate through the event loop.
+        //
+        // CRITICAL (switch path): Ink's useInput cleanup calls disableRawMode()
+        // which fires stdin.setRawMode(false) and stdin.unref(). This conflicts
+        // with the switch path's intent to keep raw mode active for seamless
+        // handoff to the child process. Guard stdin methods during unmount so
+        // Ink's cleanup operates on no-ops instead of the real terminal.
+        //
+        // Without this guard:
+        //   1. stdin.setRawMode(false) opens a cooked-mode window where
+        //      keystrokes echo and buffer in the kernel line discipline
+        //   2. stdin.unref() removes stdin from the event loop reference count
+        //   3. Multiple cliCursor.show() writes fire while still in alt screen
+        //   These leave the terminal in an inconsistent state when Claude Code
+        //   starts, manifesting as dual cursors and broken input/autocomplete.
         if (inkInstance) {
             termLog('Cleanup: unmounting Ink instance');
-            inkInstance.unmount();
+
+            const guardStdin = isSwitching && process.stdin.isTTY;
+            if (guardStdin) {
+                const origSetRawMode = process.stdin.setRawMode;
+                const origUnref = process.stdin.unref;
+                process.stdin.setRawMode = (() => process.stdin) as typeof process.stdin.setRawMode;
+                process.stdin.unref = (() => {}) as typeof process.stdin.unref;
+                termLog('Cleanup: guarding stdin from Ink raw-mode teardown');
+
+                try {
+                    inkInstance.unmount();
+                } finally {
+                    process.stdin.setRawMode = origSetRawMode;
+                    process.stdin.unref = origUnref;
+                    termLog('Cleanup: stdin guard removed');
+                }
+            } else {
+                inkInstance.unmount();
+            }
+
             inkInstance = null;
             await new Promise<void>(resolve => process.nextTick(resolve));
         }
 
         if (isSwitching) {
             // --- SWITCH TO LOCAL MODE ---
-            // Keep raw mode active to prevent keystroke echoing during transition.
-            // The child process (Claude Code) inherits the terminal fd directly
-            // via stdio: ['inherit', ...] and sets its own terminal modes via tcsetattr.
+            // Terminal state flow (with stdin guard above):
+            //   1. Ink unmount: stdin stays raw (guard prevented setRawMode(false))
+            //   2. Here: drain Node.js stdin buffer
+            //   3. Here: exit alt screen, show cursor, reset SGR
+            //   4. claudeLocal.ts: stdin.pause() + setRawMode(false) — clean transition
+            //   5. claudeLocal.ts: spawn child with stdio 'inherit'
+            //
+            // Without the guard, Ink's disableRawMode() would open a cooked-mode
+            // window between steps 1 and 4, where keystrokes echo and buffer.
 
             // Drain Node.js userspace stdin buffer to discard queued raw-mode input
             process.stdin.read();
@@ -644,7 +685,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 }
             }
 
-            // Do NOT call setRawMode(false) — child handles terminal state.
+            // Do NOT call setRawMode(false) — claudeLocal.ts handles the transition.
             // Do NOT call process.stdin.resume() — claudeLocal.ts manages stdin lifecycle.
             termLog('Cleanup: switch path complete (raw mode preserved)');
 

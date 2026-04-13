@@ -1949,6 +1949,47 @@ class Sync {
     }
 
     /**
+     * Load the latest N messages for a session, merge into store and cache.
+     * Used by the scroll-to-bottom button to ensure fresh messages are available.
+     */
+    loadLatestMessages = async (sessionId: string, count: number = 20): Promise<void> => {
+        const lock = this.getSessionMessageLock(sessionId);
+        await lock.inLock(async () => {
+            const encryption = this.encryption.getSessionEncryption(sessionId);
+            if (!encryption) return;
+
+            const response = await apiSocket.request(`/v3/sessions/${sessionId}/messages?before_seq=999999999&limit=${count}`);
+            if (!response.ok) return;
+            const data = await response.json() as V3GetSessionMessagesResponse;
+            const messages = Array.isArray(data.messages) ? data.messages : [];
+
+            let maxSeq = 0;
+            for (const msg of messages) {
+                if (msg.seq > maxSeq) maxSeq = msg.seq;
+            }
+
+            const decryptedMessages = await encryption.decryptMessages(messages);
+            const normalizedMessages: NormalizedMessage[] = [];
+            for (const decrypted of decryptedMessages) {
+                if (!decrypted) continue;
+                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content);
+                if (normalized) normalizedMessages.push(normalized);
+            }
+
+            if (normalizedMessages.length > 0) {
+                this.applyMessages(sessionId, normalizedMessages);
+            }
+
+            messageCache.save(sessionId, decryptedMessages.filter((d): d is NonNullable<typeof d> => d !== null));
+
+            const currentLast = this.sessionLastSeq.get(sessionId) ?? 0;
+            if (maxSeq > currentLast) {
+                this.sessionLastSeq.set(sessionId, maxSeq);
+            }
+        });
+    }
+
+    /**
      * Consistency recheck: verify local messages match server state.
      * Fetches the latest 20 messages from server and compares with local seq tracking.
      * If mismatch detected, triggers incremental sync to catch up.
@@ -2493,10 +2534,19 @@ class Sync {
 
 
         const sessions: Session[] = [];
+        const planModeReconciliations: { sessionId: string; mode: string }[] = [];
 
         for (const [sessionId, update] of updates) {
             const session = storage.getState().sessions[sessionId];
             if (session) {
+                const newCliMode = update.permissionMode ?? session.cliPermissionMode ?? null;
+
+                // Reconcile: if CLI reports a non-plan mode but App is stuck in plan mode,
+                // auto-restore the App's permission mode to match the CLI
+                if (newCliMode && newCliMode !== 'plan' && session.permissionMode === 'plan') {
+                    planModeReconciliations.push({ sessionId, mode: newCliMode });
+                }
+
                 sessions.push({
                     ...session,
                     active: update.active,
@@ -2505,7 +2555,7 @@ class Sync {
                     compressing: update.compressing ?? false,
                     thinkingAt: update.activeAt, // Always use activeAt for consistency
                     hud: update.hud ?? session.hud ?? null,
-                    cliPermissionMode: update.permissionMode ?? session.cliPermissionMode ?? null,
+                    cliPermissionMode: newCliMode,
                     cliCurrentModel: update.currentModel ?? session.cliCurrentModel ?? null,
                 });
             }
@@ -2515,6 +2565,11 @@ class Sync {
             // console.log('flushing activity updates ' + sessions.length);
             this.applySessions(sessions);
             // log.log(`🔄 Activity updates flushed - updated ${sessions.length} sessions`);
+        }
+
+        // Apply plan mode reconciliations after the main session update
+        for (const { sessionId, mode } of planModeReconciliations) {
+            storage.getState().updateSessionPermissionMode(sessionId, mode);
         }
     }
 

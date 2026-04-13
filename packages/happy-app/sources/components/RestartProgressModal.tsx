@@ -15,6 +15,7 @@ export type RestartStage =
     | { type: 'stopping'; sessionId: string; pid?: number }
     | { type: 'stopped'; sessionId: string }
     | { type: 'starting'; sessionId: string }
+    | { type: 'spawning_fresh'; directory: string }
     | { type: 'started'; sessionId: string; newSessionId: string }
     | { type: 'loading' }
     | { type: 'error'; message: string };
@@ -184,6 +185,19 @@ function renderStageContent(
                     </Text>
                     <Text style={[styles.message, Typography.default()]}>
                         {stage.sessionId}
+                    </Text>
+                </>
+            );
+
+        case 'spawning_fresh':
+            return (
+                <>
+                    <ActivityIndicator size="small" style={styles.indicator} />
+                    <Text style={[styles.title, Typography.default('semiBold')]}>
+                        {t('sessionInfo.restartProgressSpawningFresh')}
+                    </Text>
+                    <Text style={[styles.message, Typography.default()]}>
+                        {stage.directory}
                     </Text>
                 </>
             );

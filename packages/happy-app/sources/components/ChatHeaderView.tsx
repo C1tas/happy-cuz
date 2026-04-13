@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, Text, StyleSheet, Platform, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Platform, Pressable, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -49,6 +49,8 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     const navigation = useNavigation();
     const insets = useSafeAreaInsets();
     const headerHeight = useHeaderHeight();
+    const { width: windowWidth } = useWindowDimensions();
+    const showAvatar = windowWidth >= 800;
     const avatarAnchorRef = React.useRef<View | null>(null);
     const suppressAvatarPressUntilRef = React.useRef(0);
 
@@ -169,7 +171,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                         </Pressable>
                     )}
 
-                    {avatarId && onAvatarPress && (
+                    {showAvatar && avatarId && onAvatarPress && (
                         <View collapsable={false} ref={avatarAnchorRef} style={styles.avatarButtonSlot}>
                             {avatarMenuSession ? (
                                 <SessionActionsNativeMenu

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, machineStopSession, sessionKill } from '@/sync/ops';
+import { machineResumeSession, machineSpawnNewSession, machineStopSession, sessionKill } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useLocalSetting, useMachine } from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
@@ -99,33 +99,35 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
 type RestartAvailability = {
     canRestart: boolean;
     canShowRestart: boolean;
+    /** When true, restart will spawn a fresh session instead of resuming (no backend ID available) */
+    isFreshRestart: boolean;
     subtitle: string;
 };
 
 /**
- * Restart availability: requires the session to be connected (opposite of resume),
- * plus the same daemon/machine conditions needed for resume.
+ * Restart availability: machine must be online with RPC support.
+ * If no backend session ID exists, falls back to fresh restart (spawn new session in same directory).
  */
 function getRestartAvailability(session: Session, machine: Machine | null | undefined, _isConnected: boolean): RestartAvailability {
     const machineId = session.metadata?.machineId;
     if (!machineId) {
-        return { canRestart: false, canShowRestart: false, subtitle: '' };
+        return { canRestart: false, canShowRestart: false, isFreshRestart: false, subtitle: '' };
+    }
+
+    if (!machine || !isMachineOnline(machine)) {
+        return { canRestart: false, canShowRestart: true, isFreshRestart: false, subtitle: t('sessionInfo.restartSessionMachineOffline') };
+    }
+
+    if (!machine.metadata?.resumeSupport?.rpcAvailable) {
+        return { canRestart: false, canShowRestart: true, isFreshRestart: false, subtitle: t('sessionInfo.restartSessionNeedsUpdate') };
     }
 
     const hasBackendId = Boolean(session.metadata?.claudeSessionId || session.metadata?.codexThreadId);
     if (!hasBackendId) {
-        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionMissingBackendId') };
+        return { canRestart: true, canShowRestart: true, isFreshRestart: true, subtitle: t('sessionInfo.restartSessionFreshSubtitle') };
     }
 
-    if (!machine || !isMachineOnline(machine)) {
-        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionMachineOffline') };
-    }
-
-    if (!machine.metadata?.resumeSupport?.rpcAvailable) {
-        return { canRestart: false, canShowRestart: true, subtitle: t('sessionInfo.restartSessionNeedsUpdate') };
-    }
-
-    return { canRestart: true, canShowRestart: true, subtitle: t('sessionInfo.restartSessionSubtitle') };
+    return { canRestart: true, canShowRestart: true, isFreshRestart: false, subtitle: t('sessionInfo.restartSessionSubtitle') };
 }
 
 export function useSessionQuickActions(
@@ -216,7 +218,7 @@ export function useSessionQuickActions(
     });
 
     const [restartingSession, performRestart] = useHappyAction(async () => {
-        console.log('[Restart] Starting restart flow, canRestart:', restartAvailability.canRestart, 'machineId:', machineId);
+        console.log('[Restart] Starting restart flow, canRestart:', restartAvailability.canRestart, 'isFreshRestart:', restartAvailability.isFreshRestart, 'machineId:', machineId);
         if (!restartAvailability.canRestart || !machineId) {
             throw new HappyError(restartAvailability.subtitle, false);
         }
@@ -257,23 +259,58 @@ export function useSessionQuickActions(
                 await new Promise((resolve) => setTimeout(resolve, 1500));
             }
 
-            // Stage 3: Resume with new process (reusing same session ID)
-            console.log('[Restart] Starting resume, machineId:', machineId, 'sessionId:', session.id);
-            updateRestartStage({ type: 'starting', sessionId: session.id });
-            const result = await machineResumeSession({ machineId, sessionId: session.id });
-            console.log('[Restart] Resume result:', result.type, result.type === 'success' ? result.sessionId : '');
+            let resultSessionId: string;
 
-            if (result.type === 'requestToApproveDirectoryCreation') {
-                throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
-            }
-            if (result.type === 'error') {
-                throw new HappyError(result.errorMessage, false);
+            if (restartAvailability.isFreshRestart) {
+                // Fresh restart: spawn a new session in the same directory
+                const directory = session.metadata?.path;
+                if (!directory) {
+                    throw new HappyError('Cannot restart: session has no working directory', false);
+                }
+
+                console.log('[Restart] Fresh restart — spawning new session in:', directory);
+                updateRestartStage({ type: 'spawning_fresh', directory });
+
+                const agent = (session.metadata?.flavor as 'codex' | 'claude' | 'gemini' | 'openclaw' | undefined) ?? undefined;
+                const result = await machineSpawnNewSession({
+                    machineId,
+                    directory,
+                    agent,
+                });
+
+                if (result.type === 'requestToApproveDirectoryCreation') {
+                    throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
+                }
+                if (result.type === 'error') {
+                    throw new HappyError(result.errorMessage, false);
+                }
+
+                resultSessionId = result.sessionId;
+
+                // Archive old session after successful spawn
+                console.log('[Restart] Fresh restart — archiving old session:', session.id);
+                await sessionKill(session.id);
+            } else {
+                // Resume restart: reuse backend session ID
+                console.log('[Restart] Starting resume, machineId:', machineId, 'sessionId:', session.id);
+                updateRestartStage({ type: 'starting', sessionId: session.id });
+                const result = await machineResumeSession({ machineId, sessionId: session.id });
+                console.log('[Restart] Resume result:', result.type, result.type === 'success' ? result.sessionId : '');
+
+                if (result.type === 'requestToApproveDirectoryCreation') {
+                    throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
+                }
+                if (result.type === 'error') {
+                    throw new HappyError(result.errorMessage, false);
+                }
+
+                resultSessionId = result.sessionId;
             }
 
             updateRestartStage({
                 type: 'started',
                 sessionId: session.id,
-                newSessionId: result.sessionId,
+                newSessionId: resultSessionId,
             });
 
             // Stage 4: Load conversation history
@@ -281,22 +318,22 @@ export function useSessionQuickActions(
             updateRestartStage({ type: 'loading' });
             for (let attempt = 0; attempt < 3; attempt++) {
                 await sync.refreshSessions();
-                if (storage.getState().sessions[result.sessionId]) {
+                if (storage.getState().sessions[resultSessionId]) {
                     break;
                 }
                 await new Promise((resolve) => setTimeout(resolve, 150));
             }
 
             if (session.permissionMode) {
-                storage.getState().updateSessionPermissionMode(result.sessionId, session.permissionMode);
+                storage.getState().updateSessionPermissionMode(resultSessionId, session.permissionMode);
             }
             if (session.modelMode) {
-                storage.getState().updateSessionModelMode(result.sessionId, session.modelMode);
+                storage.getState().updateSessionModelMode(resultSessionId, session.modelMode);
             }
 
             Modal.hide(modalId);
-            console.log('[Restart] Complete, navigating to session:', result.sessionId);
-            navigateToSession(result.sessionId);
+            console.log('[Restart] Complete, navigating to session:', resultSessionId);
+            navigateToSession(resultSessionId);
         } catch (error) {
             console.log('[Restart] Error caught:', error instanceof HappyError ? error.message : error);
             if (error instanceof HappyError) {

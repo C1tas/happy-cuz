@@ -10,10 +10,19 @@ import { ChatFooter } from './ChatFooter';
 import { Message } from '@/sync/typesMessage';
 import { sync } from '@/sync/sync';
 
-export const ChatList = React.memo((props: { session: Session }) => {
+export type ChatListHandle = {
+    scrollToBottom: () => void;
+};
+
+export const ChatList = React.memo(React.forwardRef<ChatListHandle, { session: Session }>((props, ref) => {
     const { messages, hasOlderMessages, isLoadingOlder } = useSessionMessages(props.session.id);
+    const internalRef = React.useRef<ChatListHandle>(null);
+    React.useImperativeHandle(ref, () => ({
+        scrollToBottom: () => internalRef.current?.scrollToBottom(),
+    }));
     return (
         <ChatListInternal
+            ref={internalRef}
             metadata={props.session.metadata}
             sessionId={props.session.id}
             messages={messages}
@@ -21,7 +30,7 @@ export const ChatList = React.memo((props: { session: Session }) => {
             isLoadingOlder={isLoadingOlder}
         />
     )
-});
+}));
 
 const ListHeader = React.memo(() => {
     const headerHeight = useHeaderHeight();
@@ -48,13 +57,21 @@ const LoadOlderIndicator = React.memo((props: { isLoading: boolean }) => {
 /** Distance from scroll edge (in dp) to trigger loading older messages */
 const LOAD_THRESHOLD = 200;
 
-const ChatListInternal = React.memo((props: {
+const ChatListInternal = React.memo(React.forwardRef<ChatListHandle, {
     metadata: Metadata | null,
     sessionId: string,
     messages: Message[],
     hasOlderMessages: boolean,
     isLoadingOlder: boolean,
-}) => {
+}>((props, ref) => {
+    const flatListRef = React.useRef<FlatList>(null);
+
+    React.useImperativeHandle(ref, () => ({
+        scrollToBottom: () => {
+            flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        },
+    }));
+
     const keyExtractor = useCallback((item: any) => item.id, []);
     const renderItem = useCallback(({ item }: { item: any }) => (
         <MessageView message={item} metadata={props.metadata} sessionId={props.sessionId} />
@@ -88,6 +105,7 @@ const ChatListInternal = React.memo((props: {
 
     return (
         <FlatList
+            ref={flatListRef}
             data={props.messages}
             inverted={true}
             keyExtractor={keyExtractor}
@@ -114,4 +132,4 @@ const ChatListInternal = React.memo((props: {
             initialNumToRender={12}
         />
     )
-});
+}));

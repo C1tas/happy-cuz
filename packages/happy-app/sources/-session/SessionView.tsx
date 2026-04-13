@@ -13,7 +13,7 @@ import {
 } from '@/components/modelModeOptions';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/ChatHeaderView';
-import { ChatList } from '@/components/ChatList';
+import { ChatList, ChatListHandle } from '@/components/ChatList';
 import { Deferred } from '@/components/Deferred';
 import { EmptyMessages } from '@/components/EmptyMessages';
 import { SessionActionsAnchor, SessionActionsPopover } from '@/components/SessionActionsPopover';
@@ -201,6 +201,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const deviceType = useDeviceType();
     const isTablet = useIsTablet();
     const [message, setMessage] = React.useState('');
+    const chatListRef = React.useRef<ChatListHandle>(null);
     const realtimeStatus = useRealtimeStatus();
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
@@ -357,11 +358,16 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
         gitStatusSync.getSync(sessionId);
     }, [sessionId, realtimeStatus]);
 
+    const handleScrollToBottom = React.useCallback(async () => {
+        await sync.loadLatestMessages(sessionId, 20);
+        chatListRef.current?.scrollToBottom();
+    }, [sessionId]);
+
     let content = (
         <>
             <Deferred>
                 {messages.length > 0 && (
-                    <ChatList session={session} />
+                    <ChatList ref={chatListRef} session={session} />
                 )}
             </Deferred>
         </>
@@ -434,6 +440,7 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                 contextPercent: session.hud.contextPercent,
                 completedTools: session.hud.completedTools,
             } : null}
+            onScrollToBottom={handleScrollToBottom}
         />
     );
 
