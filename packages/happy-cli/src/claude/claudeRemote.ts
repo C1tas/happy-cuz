@@ -30,6 +30,8 @@ export async function claudeRemote(opts: {
     jsRuntime?: JsRuntime,
     /** Keep color/emoji output in remote mode Claude process (default: false = suppress) */
     remoteColor?: boolean,
+    /** Suppress emoji in Claude output via HAPPY_SUPPRESS_EMOJI env var */
+    suppressEmoji?: boolean,
 
     // Dynamic parameters
     nextMessage: () => Promise<{ message: string, mode: EnhancedMode } | null>,
@@ -137,10 +139,11 @@ export async function claudeRemote(opts: {
             return resolve(join(projectPath(), 'scripts', 'claude_remote_launcher.cjs'));
         })(),
         settingsPath: opts.hookSettingsPath,
-        env: opts.remoteColor ? undefined : {
+        env: opts.remoteColor ? (opts.suppressEmoji ? { HAPPY_SUPPRESS_EMOJI: '1' } : undefined) : {
             NO_COLOR: '1',
             FORCE_COLOR: '0',
             TERM: 'dumb',
+            ...(opts.suppressEmoji ? { HAPPY_SUPPRESS_EMOJI: '1' } : {}),
         },
     }
 

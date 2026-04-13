@@ -19,6 +19,8 @@ export type ResumeLaunchOptions = {
     yolo?: boolean;
     remoteColor?: boolean;
     noAltScreen?: boolean;
+    happySessionId?: string;
+    dangerouslySkipPermissions?: boolean;
 };
 
 export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; sessionId: string; skipMenu: boolean } {
@@ -69,6 +71,12 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
         if (options.startedBy) {
             args.push('--started-by', options.startedBy);
         }
+        if (options.happySessionId) {
+            args.push('--happy-session-id', options.happySessionId);
+        }
+        if (options.dangerouslySkipPermissions) {
+            args.push('--dangerously-skip-permissions');
+        }
         return {
             cwd: metadata.path,
             args,
@@ -94,6 +102,12 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
         }
         if (options.noAltScreen) {
             args.push('--no-alt-screen');
+        }
+        if (options.happySessionId) {
+            args.push('--happy-session-id', options.happySessionId);
+        }
+        if (options.dangerouslySkipPermissions) {
+            args.push('--dangerously-skip-permissions');
         }
         args.push('--resume', metadata.claudeSessionId);
         return {
@@ -200,6 +214,10 @@ export async function handleResumeCommand(args: string[]): Promise<void> {
             noAltScreen: resumeOptions.noAltScreen,
         };
     }
+
+    // Always pass the happy session ID so the spawned process reconnects
+    // to the same Happy session instead of creating a new one
+    launchOptions.happySessionId = session.id;
 
     const launch = buildResumeLaunch(session, launchOptions);
 

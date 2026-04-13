@@ -22,14 +22,22 @@ class Configuration {
   public readonly privateKeyFile: string
   public readonly daemonStateFile: string
   public readonly daemonLockFile: string
+  public readonly sessionMappingFile: string
+  public readonly sessionMappingLockFile: string
   public readonly currentCliVersion: string
 
   public readonly isExperimentalEnabled: boolean
   public readonly disableCaffeinate: boolean
 
   constructor() {
-    // Server configuration - priority: parameter > environment > default
-    this.serverUrl = process.env.HAPPY_SERVER_URL || 'https://api.cluster-fluster.com'
+    // Server configuration - HAPPY_SERVER_URL is required (set by env-wrapper.cjs or manually)
+    const serverUrl = process.env.HAPPY_SERVER_URL
+    if (!serverUrl) {
+      console.error('\x1b[31m\x1b[1m[FATAL]\x1b[0m HAPPY_SERVER_URL environment variable is not set.')
+      console.error('  Set it in your environment or use the env-wrapper: node scripts/env-wrapper.cjs stable <command>')
+      process.exit(1)
+    }
+    this.serverUrl = serverUrl
     this.webappUrl = process.env.HAPPY_WEBAPP_URL || 'https://app.happy.engineering'
 
     // Check if we're running as daemon based on process args
@@ -50,6 +58,8 @@ class Configuration {
     this.privateKeyFile = join(this.happyHomeDir, 'access.key')
     this.daemonStateFile = join(this.happyHomeDir, 'daemon.state.json')
     this.daemonLockFile = join(this.happyHomeDir, 'daemon.state.json.lock')
+    this.sessionMappingFile = join(this.happyHomeDir, 'session-mapping.json')
+    this.sessionMappingLockFile = join(this.happyHomeDir, 'session-mapping.json.lock')
 
     this.isExperimentalEnabled = ['true', '1', 'yes'].includes(process.env.HAPPY_EXPERIMENTAL?.toLowerCase() || '');
     this.disableCaffeinate = ['true', '1', 'yes'].includes(process.env.HAPPY_DISABLE_CAFFEINATE?.toLowerCase() || '');

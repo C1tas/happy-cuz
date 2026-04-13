@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import { logger } from '@/ui/logger';
 import { Credentials, readSettings } from '@/persistence';
+import { registerSessionMapping, lookupHappySessionForAgent } from '@/persistence';
+import { reconnectToExistingSession } from '@/resume/resolveHappySession';
 import { initialMachineMetadata } from '@/daemon/run';
 import { configuration } from '@/configuration';
 import packageJson from '../../package.json';
@@ -68,6 +70,7 @@ export async function runCodex(opts: {
     startedBy?: 'daemon' | 'terminal';
     noSandbox?: boolean;
     resumeThreadId?: string;
+    happySessionId?: string;
 }): Promise<void> {
     // Early check: ensure Codex CLI is installed before proceeding
     try {
@@ -132,7 +135,29 @@ export async function runCodex(opts: {
         startedBy: opts.startedBy,
         sandbox: sandboxConfig,
     });
-    const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+
+    // Safety net: if resuming a Codex thread without explicit happy session ID,
+    // check local mapping to prevent creating a duplicate Happy session
+    if (!opts.happySessionId && opts.resumeThreadId) {
+        const mappedHappyId = await lookupHappySessionForAgent(opts.resumeThreadId);
+        if (mappedHappyId) {
+            logger.debug(`[Codex] Local mapping found: codex=${opts.resumeThreadId} -> happy=${mappedHappyId}`);
+            opts.happySessionId = mappedHappyId;
+        }
+    }
+
+    let response: Awaited<ReturnType<typeof reconnectToExistingSession>> | Awaited<ReturnType<typeof api.getOrCreateSession>>;
+    if (opts.happySessionId) {
+        response = await reconnectToExistingSession(opts.happySessionId);
+        if (!response) {
+            // Reconnect failed (timeout/network) — do NOT create a new session.
+            // Let response stay null to enter offline reconnection mode, which will
+            // keep retrying reconnectToExistingSession until the server is available.
+            logger.debug(`[Codex] Reconnect to ${opts.happySessionId} failed, entering offline mode with reconnection`);
+        }
+    } else {
+        response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+    }
 
     // Handle server unreachable case - create offline stub with hot reconnection
     let session: ApiSessionClient;
@@ -148,6 +173,7 @@ export async function runCodex(opts: {
         metadata,
         state,
         response,
+        happySessionId: opts.happySessionId,
         onSessionSwap: (newSession) => {
             session = newSession;
             // Update permission handler with new session to avoid stale reference
@@ -157,6 +183,12 @@ export async function runCodex(opts: {
         }
     });
     session = initialSession;
+
+    // For reconnected sessions, push fresh metadata immediately
+    if (opts.happySessionId && response) {
+        session.updateMetadata(() => metadata);
+        logger.debug(`[Codex] Reconnected to existing session: ${response.id}, pushed fresh metadata`);
+    }
 
     // Always report to daemon if it exists (skip if offline)
     if (response) {
@@ -180,7 +212,8 @@ export async function runCodex(opts: {
 
     // Track current overrides to apply per message
     // Use shared PermissionMode type from api/types for cross-agent compatibility
-    let currentPermissionMode: import('@/api/types').PermissionMode | undefined = undefined;
+    // Default to yolo (full access) — CLI always starts with bypass; App-side changes applied per-turn
+    let currentPermissionMode: import('@/api/types').PermissionMode | undefined = 'yolo';
     let currentModel: string | undefined = undefined;
 
     session.onUserMessage((message) => {
@@ -632,6 +665,13 @@ export async function runCodex(opts: {
                         ...currentMetadata,
                         codexThreadId: startedThread.threadId,
                     }));
+
+                    // Persist the binding locally so future resumes use the same Happy session
+                    if (response) {
+                        registerSessionMapping(startedThread.threadId, response.id, 'codex').catch((err) => {
+                            logger.debug(`[Codex] Failed to persist session mapping: ${err instanceof Error ? err.message : err}`);
+                        });
+                    }
                 }
 
                 const turnPrompt = first

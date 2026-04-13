@@ -8,7 +8,7 @@ import { type Fastify } from "../types";
 const getMessagesQuerySchema = z.object({
     after_seq: z.coerce.number().int().min(0).default(0),
     before_seq: z.coerce.number().int().min(0).optional(),
-    limit: z.coerce.number().int().min(1).max(500).default(100)
+    limit: z.coerce.number().int().min(1).max(200).default(100)
 });
 
 const sendMessagesBodySchema = z.object({

@@ -27,46 +27,29 @@ export function sessionRoutes(app: Fastify) {
                 updatedAt: true,
                 metadata: true,
                 metadataVersion: true,
-                agentState: true,
+                // agentState excluded from list — delivered via real-time WebSocket updates
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
                 lastActiveAt: true,
-                // messages: {
-                //     orderBy: { seq: 'desc' },
-                //     take: 1,
-                //     select: {
-                //         id: true,
-                //         seq: true,
-                //         content: true,
-                //         localId: true,
-                //         createdAt: true
-                //     }
-                // }
             }
         });
 
         return reply.send({
-            sessions: sessions.map((v) => {
-                // const lastMessage = v.messages[0];
-                const sessionUpdatedAt = v.updatedAt.getTime();
-                // const lastMessageCreatedAt = lastMessage ? lastMessage.createdAt.getTime() : 0;
-
-                return {
-                    id: v.id,
-                    seq: v.seq,
-                    createdAt: v.createdAt.getTime(),
-                    updatedAt: sessionUpdatedAt,
-                    active: v.active,
-                    activeAt: v.lastActiveAt.getTime(),
-                    metadata: v.metadata,
-                    metadataVersion: v.metadataVersion,
-                    agentState: v.agentState,
-                    agentStateVersion: v.agentStateVersion,
-                    dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                    lastMessage: null
-                };
-            })
+            sessions: sessions.map((v) => ({
+                id: v.id,
+                seq: v.seq,
+                createdAt: v.createdAt.getTime(),
+                updatedAt: v.updatedAt.getTime(),
+                active: v.active,
+                activeAt: v.lastActiveAt.getTime(),
+                metadata: v.metadata,
+                metadataVersion: v.metadataVersion,
+                agentState: null,
+                agentStateVersion: v.agentStateVersion,
+                dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
+                lastMessage: null
+            }))
         });
     });
 
@@ -97,7 +80,7 @@ export function sessionRoutes(app: Fastify) {
                 updatedAt: true,
                 metadata: true,
                 metadataVersion: true,
-                agentState: true,
+                // agentState excluded from list — delivered via real-time WebSocket updates
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
@@ -115,7 +98,7 @@ export function sessionRoutes(app: Fastify) {
                 activeAt: v.lastActiveAt.getTime(),
                 metadata: v.metadata,
                 metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
+                agentState: null,
                 agentStateVersion: v.agentStateVersion,
                 dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
             }))
@@ -177,7 +160,7 @@ export function sessionRoutes(app: Fastify) {
                 updatedAt: true,
                 metadata: true,
                 metadataVersion: true,
-                agentState: true,
+                // agentState excluded from list — delivered via real-time WebSocket updates
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
@@ -206,7 +189,7 @@ export function sessionRoutes(app: Fastify) {
                 activeAt: v.lastActiveAt.getTime(),
                 metadata: v.metadata,
                 metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
+                agentState: null,
                 agentStateVersion: v.agentStateVersion,
                 dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
             })),

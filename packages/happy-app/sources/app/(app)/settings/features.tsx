@@ -6,14 +6,16 @@ import { ItemList } from '@/components/ItemList';
 import { useSettingMutable, useLocalSettingMutable } from '@/sync/storage';
 import { Switch } from '@/components/Switch';
 import { t } from '@/text';
+import { useRouter } from 'expo-router';
 
 export default function FeaturesSettingsScreen() {
+    const router = useRouter();
     const [experiments, setExperiments] = useSettingMutable('experiments');
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
     const [commandPaletteEnabled, setCommandPaletteEnabled] = useLocalSettingMutable('commandPaletteEnabled');
     const [markdownCopyV2, setMarkdownCopyV2] = useLocalSettingMutable('markdownCopyV2');
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
-    const [expResumeSession, setExpResumeSession] = useSettingMutable('expResumeSession');
+
 
     return (
         <ItemList style={{ paddingTop: 0 }}>
@@ -58,18 +60,6 @@ export default function FeaturesSettingsScreen() {
                     }
                     showChevron={false}
                 />
-                <Item
-                    title="Resume Session"
-                    subtitle="Allow resuming disconnected sessions via the machine daemon"
-                    icon={<Ionicons name="play-circle-outline" size={29} color="#30D158" />}
-                    rightElement={
-                        <Switch
-                            value={expResumeSession}
-                            onValueChange={setExpResumeSession}
-                        />
-                    }
-                    showChevron={false}
-                />
             </ItemGroup>
 
             {/* Web-only Features */}
@@ -104,6 +94,20 @@ export default function FeaturesSettingsScreen() {
                     />
                 </ItemGroup>
             )}
+
+            {/* Diagnostics */}
+            <ItemGroup
+                title={t('settingsFeatures.diagnostics')}
+                footer={t('settingsFeatures.diagnosticsDescription')}
+            >
+                <Item
+                    title={t('settingsFeatures.notificationTest')}
+                    subtitle={t('settingsFeatures.notificationTestSubtitle')}
+                    icon={<Ionicons name="notifications-outline" size={29} color="#FF2D55" />}
+                    onPress={() => router.push('/dev/notification-test')}
+                    showChevron={true}
+                />
+            </ItemGroup>
         </ItemList>
     );
 }

@@ -46,6 +46,8 @@ interface LoopOptions {
     remoteColor?: boolean
     /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
     noAltScreen?: boolean
+    /** Suppress emoji output in remote mode (from settings.remoteTerminal.suppressEmoji) */
+    suppressEmoji?: boolean
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -69,7 +71,16 @@ export async function loop(opts: LoopOptions): Promise<number> {
         jsRuntime: opts.jsRuntime,
         remoteColor: opts.remoteColor,
         noAltScreen: opts.noAltScreen,
+        suppressEmoji: opts.suppressEmoji,
     });
+
+    // Set initial permission mode and model from startup options
+    if (opts.permissionMode) {
+        session.currentPermissionMode = opts.permissionMode;
+    }
+    if (opts.model) {
+        session.currentModel = opts.model;
+    }
 
     opts.onSessionReady?.(session)
 

@@ -5,12 +5,15 @@ const serverConfigStorage = new MMKV({ id: 'server-config' });
 
 const SERVER_KEY = 'custom-server-url';
 const LOG_SERVER_KEY = 'log-server-url';
-const DEFAULT_SERVER_URL = 'https://api.cluster-fluster.com';
+// Build-time default — MUST be set via EXPO_PUBLIC_HAPPY_SERVER_URL at build time
+const BUILD_DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_HAPPY_SERVER_URL;
 
 export function getServerUrl(): string {
-    return serverConfigStorage.getString(SERVER_KEY) || 
-           process.env.EXPO_PUBLIC_HAPPY_SERVER_URL || 
-           DEFAULT_SERVER_URL;
+    const stored = serverConfigStorage.getString(SERVER_KEY);
+    if (stored) return stored;
+    if (BUILD_DEFAULT_SERVER_URL) return BUILD_DEFAULT_SERVER_URL;
+    console.error('[FATAL] EXPO_PUBLIC_HAPPY_SERVER_URL is not set. Set it at build time.');
+    return 'https://localhost:3005';
 }
 
 export function setServerUrl(url: string | null): void {
@@ -36,7 +39,8 @@ export function setLogServerUrl(url: string | null): void {
 }
 
 export function isUsingCustomServer(): boolean {
-    return getServerUrl() !== DEFAULT_SERVER_URL;
+    const stored = serverConfigStorage.getString(SERVER_KEY);
+    return !!stored && stored !== BUILD_DEFAULT_SERVER_URL;
 }
 
 export function getServerInfo(): { hostname: string; port?: number; isCustom: boolean } {

@@ -208,6 +208,18 @@ export async function machineStopDaemon(machineId: string): Promise<{ message: s
 }
 
 /**
+ * Stop a specific session on a machine via daemon RPC
+ */
+export async function machineStopSession(machineId: string, sessionId: string): Promise<{ message: string }> {
+    const result = await apiSocket.machineRPC<{ message: string }, { sessionId: string }>(
+        machineId,
+        'stop-session',
+        { sessionId }
+    );
+    return result;
+}
+
+/**
  * Execute a bash command on a specific machine
  */
 export async function machineBash(

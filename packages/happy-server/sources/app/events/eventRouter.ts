@@ -493,7 +493,7 @@ export function buildUpdateMachineUpdate(machineId: string, updateSeq: number, u
     };
 }
 
-export function buildSessionActivityEphemeral(sessionId: string, active: boolean, activeAt: number, thinking?: boolean, compressing?: boolean, hud?: Record<string, unknown>): EphemeralPayload {
+export function buildSessionActivityEphemeral(sessionId: string, active: boolean, activeAt: number, thinking?: boolean, compressing?: boolean, hud?: Record<string, unknown>, permissionMode?: string, currentModel?: string): EphemeralPayload {
     return {
         type: 'activity',
         id: sessionId,
@@ -501,7 +501,9 @@ export function buildSessionActivityEphemeral(sessionId: string, active: boolean
         activeAt,
         thinking: thinking || false,
         compressing: compressing || false,
-        hud: hud || undefined
+        hud: hud || undefined,
+        permissionMode: permissionMode || undefined,
+        currentModel: currentModel || undefined,
     };
 }
 

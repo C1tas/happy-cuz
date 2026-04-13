@@ -13,11 +13,12 @@ import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
 import packageJson from '../../package.json';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock } from '@/persistence';
+import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock, registerSessionMapping, pruneSessionMappings } from '@/persistence';
 
 import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { join } from 'path';
 import { projectPath } from '@/projectPath';
 import { getTmuxUtilities, isTmuxAvailable, parseTmuxSessionIdentifier, formatTmuxSessionIdentifier } from '@/utils/tmux';
@@ -26,6 +27,16 @@ import { detectCLIAvailability } from '@/utils/detectCLI';
 import { buildResumeLaunch } from '@/resume/handleResumeCommand';
 import { detectResumeSupport } from '@/resume/localHappyAgentAuth';
 import { resolveHappySession } from '@/resume/resolveHappySession';
+import { getGitCommitHash } from '@/utils/gitCommit';
+
+function computeFileHash(filePath: string): string | null {
+  try {
+    const content = readFileSync(filePath);
+    return createHash('md5').update(content).digest('hex').slice(0, 12);
+  } catch {
+    return null;
+  }
+}
 
 // Prepare initial metadata
 // Suffix host with `-dev` for the HAPPY_VARIANT=dev variant so the dev daemon
@@ -41,6 +52,7 @@ export const initialMachineMetadata: MachineMetadata = {
   happyLibDir: projectPath(),
   cliAvailability: detectCLIAvailability(),
   resumeSupport: detectResumeSupport(),
+  gitCommitHash: getGitCommitHash(),
 };
 
 export async function startDaemon(): Promise<void> {
@@ -195,6 +207,20 @@ export async function startDaemon(): Promise<void> {
         };
         pidToTrackedSession.set(pid, trackedSession);
         logger.debug(`[DAEMON RUN] Registered externally-started session ${sessionId}`);
+      }
+
+      // Persist any known agent session → happy session mappings (backup write path)
+      const claudeSessionId = sessionMetadata.claudeSessionId;
+      const codexThreadId = sessionMetadata.codexThreadId;
+      if (claudeSessionId) {
+        registerSessionMapping(claudeSessionId, sessionId, 'claude').catch((err) => {
+          logger.debug(`[DAEMON RUN] Failed to persist claude session mapping: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+      if (codexThreadId) {
+        registerSessionMapping(codexThreadId, sessionId, 'codex').catch((err) => {
+          logger.debug(`[DAEMON RUN] Failed to persist codex session mapping: ${err instanceof Error ? err.message : err}`);
+        });
       }
     };
 
@@ -564,6 +590,8 @@ export async function startDaemon(): Promise<void> {
         const launch = buildResumeLaunch(previousSession, {
           startedBy: 'daemon',
           claudeStartingMode: 'remote',
+          happySessionId: previousSession.id,
+          dangerouslySkipPermissions: previousSession.metadata.dangerouslySkipPermissions ?? true,
         });
 
         await fs.access(launch.cwd);
@@ -685,6 +713,7 @@ export async function startDaemon(): Promise<void> {
     // 4. Write heartbeat
     const heartbeatIntervalMs = parseInt(process.env.HAPPY_DAEMON_HEARTBEAT_INTERVAL || '60000');
     let heartbeatRunning = false
+    let lastMappingPruneTime = 0;
     const restartOnStaleVersionAndHeartbeat = setInterval(async () => {
       if (heartbeatRunning) {
         return;
@@ -705,6 +734,18 @@ export async function startDaemon(): Promise<void> {
           logger.debug(`[DAEMON RUN] Removing stale session with PID ${pid} (process no longer exists)`);
           pidToTrackedSession.delete(pid);
         }
+      }
+
+      // Prune stale session mappings (once per 24 hours)
+      if (Date.now() - lastMappingPruneTime > 24 * 60 * 60 * 1000) {
+        lastMappingPruneTime = Date.now();
+        pruneSessionMappings().then((count) => {
+          if (count > 0) {
+            logger.debug(`[DAEMON RUN] Pruned ${count} stale session mappings`);
+          }
+        }).catch((err) => {
+          logger.debug(`[DAEMON RUN] Failed to prune session mappings: ${err instanceof Error ? err.message : err}`);
+        });
       }
 
       // Check if daemon needs update
@@ -770,6 +811,40 @@ export async function startDaemon(): Promise<void> {
       heartbeatRunning = false;
     }, heartbeatIntervalMs); // Every 60 seconds in production
 
+    // File-watch restart: detect dist changes from local builds
+    // We poll the dist entry hash instead of using fs.watch because `yarn build`
+    // runs `shx rm -rf dist` which destroys the watched directory inode, killing
+    // any fs.watch handle. Polling every 2s is reliable and cheap.
+    const distEntryPath = join(projectPath(), 'dist', 'index.mjs');
+    const startupDistHash = computeFileHash(distEntryPath);
+    logger.debug(`[DAEMON RUN] Startup dist hash: ${startupDistHash} (${distEntryPath})`);
+
+    let fileWatchRestartTriggered = false;
+    const distPollInterval = setInterval(() => {
+      if (fileWatchRestartTriggered) return;
+      const currentHash = computeFileHash(distEntryPath);
+      // File may be temporarily missing during rm -rf dist; skip null
+      if (currentHash && currentHash !== startupDistHash) {
+        fileWatchRestartTriggered = true;
+        logger.debug(`[DAEMON RUN] Dist file changed: ${startupDistHash} → ${currentHash}, triggering restart`);
+
+        clearInterval(restartOnStaleVersionAndHeartbeat);
+        clearInterval(distPollInterval);
+
+        try {
+          spawnHappyCLI(['daemon', 'start'], {
+            detached: true,
+            stdio: 'ignore'
+          });
+        } catch (error) {
+          logger.debug('[DAEMON RUN] Failed to spawn new daemon after dist change', error);
+        }
+
+        setTimeout(() => process.exit(0), 10_000);
+      }
+    }, 2000);
+    logger.debug('[DAEMON RUN] Dist file poll watcher active (2s interval)');
+
     // Setup signal handlers
     const cleanupAndShutdown = async (source: 'happy-app' | 'happy-cli' | 'os-signal' | 'exception', errorMessage?: string) => {
       logger.debug(`[DAEMON RUN] Starting proper cleanup (source: ${source}, errorMessage: ${errorMessage})...`);
@@ -779,6 +854,7 @@ export async function startDaemon(): Promise<void> {
         clearInterval(restartOnStaleVersionAndHeartbeat);
         logger.debug('[DAEMON RUN] Health check interval cleared');
       }
+      clearInterval(distPollInterval);
 
       // Update daemon state before shutting down
       await apiMachine.updateDaemonState((state: DaemonState | null) => ({

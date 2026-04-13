@@ -4,7 +4,8 @@ import { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
-import type { SessionHudData } from "@/api/types";
+import { registerSessionMapping } from "@/persistence";
+import type { PermissionMode, SessionHudData } from "@/api/types";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,12 +30,19 @@ export class Session {
     readonly remoteColor: boolean;
     /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
     readonly noAltScreen: boolean;
+    /** Suppress emoji output in remote mode (from settings.remoteTerminal.suppressEmoji) */
+    readonly suppressEmoji: boolean;
 
     sessionId: string | null;
     mode: 'local' | 'remote' = 'local';
+    /** When true, queue-driven auto-switch to remote mode is suppressed.
+     *  Set by double-space exit from remote; cleared by explicit RPC switch, normal exit, or /clear. */
+    localExitLock: boolean = false;
     thinking: boolean = false;
     compressing: boolean = false;
     hudData: SessionHudData | null = null;
+    currentPermissionMode: PermissionMode = 'bypassPermissions';
+    currentModel: string | undefined = undefined;
 
     /** The Happy session ID used for HUD file naming */
     private readonly happySessionId: string;
@@ -66,6 +74,8 @@ export class Session {
         remoteColor?: boolean,
         /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
         noAltScreen?: boolean,
+        /** Suppress emoji output in remote mode */
+        suppressEmoji?: boolean,
     }) {
         this.path = opts.path;
         this.api = opts.api;
@@ -83,16 +93,26 @@ export class Session {
         this.jsRuntime = opts.jsRuntime ?? 'node';
         this.remoteColor = opts.remoteColor ?? false;
         this.noAltScreen = opts.noAltScreen ?? false;
+        this.suppressEmoji = opts.suppressEmoji ?? false;
         this.happySessionId = opts.client.sessionId;
 
         // Start keep alive
-        this.client.keepAlive(this.thinking, this.mode, this.compressing, this.hudData ?? undefined);
+        this.sendKeepAlive();
         this.keepAliveInterval = setInterval(() => {
             this.readHudFile();
-            this.client.keepAlive(this.thinking, this.mode, this.compressing, this.hudData ?? undefined);
+            this.sendKeepAlive();
         }, 2000);
     }
-    
+
+    private sendKeepAlive = (): void => {
+        this.client.keepAlive(
+            this.thinking, this.mode, this.compressing,
+            this.hudData ?? undefined,
+            this.currentPermissionMode,
+            this.currentModel,
+        );
+    }
+
     /**
      * Cleanup resources (call when session is no longer needed)
      */
@@ -104,18 +124,28 @@ export class Session {
 
     onThinkingChange = (thinking: boolean) => {
         this.thinking = thinking;
-        this.client.keepAlive(thinking, this.mode, this.compressing, this.hudData ?? undefined);
+        this.sendKeepAlive();
     }
 
     onCompressingChange = (compressing: boolean) => {
         this.compressing = compressing;
-        this.client.keepAlive(this.thinking, this.mode, compressing, this.hudData ?? undefined);
+        this.sendKeepAlive();
     }
 
     onModeChange = (mode: 'local' | 'remote') => {
         this.mode = mode;
-        this.client.keepAlive(this.thinking, mode, this.compressing, this.hudData ?? undefined);
+        this.sendKeepAlive();
         this._onModeChange(mode);
+    }
+
+    onPermissionModeChange = (permissionMode: PermissionMode) => {
+        this.currentPermissionMode = permissionMode;
+        this.sendKeepAlive();
+    }
+
+    onModelChange = (model: string | undefined) => {
+        this.currentModel = model;
+        this.sendKeepAlive();
     }
 
     /** Read HUD data written by the statusLine wrapper */
@@ -142,14 +172,19 @@ export class Session {
      */
     onSessionFound = (sessionId: string) => {
         this.sessionId = sessionId;
-        
+
         // Update metadata with Claude Code session ID
         this.client.updateMetadata((metadata) => ({
             ...metadata,
             claudeSessionId: sessionId
         }));
         logger.debug(`[Session] Claude Code session ID ${sessionId} added to metadata`);
-        
+
+        // Persist the binding locally so future resumes use the same Happy session
+        registerSessionMapping(sessionId, this.happySessionId, 'claude').catch((err) => {
+            logger.debug(`[Session] Failed to persist session mapping: ${err instanceof Error ? err.message : err}`);
+        });
+
         // Notify all registered callbacks
         for (const callback of this.sessionFoundCallbacks) {
             callback(sessionId);
@@ -177,8 +212,10 @@ export class Session {
      * Clear the current session ID (used by /clear command)
      */
     clearSessionId = (): void => {
+        const previousId = this.sessionId;
         this.sessionId = null;
-        logger.debug('[Session] Session ID cleared');
+        this.localExitLock = false;
+        logger.debug(`[Session] Session ID cleared (was: ${previousId})`);
     }
 
     /**

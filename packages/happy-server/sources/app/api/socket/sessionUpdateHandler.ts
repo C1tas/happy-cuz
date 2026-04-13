@@ -36,11 +36,15 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
 
             // Update metadata
+            // Note: active is set to true to handle reconnection after resume.
+            // This is safe because: (1) deleted sessions are hard-deleted and won't be found,
+            // (2) the version check above prevents stale clients from updating.
             const { count } = await db.session.updateMany({
                 where: { id: sid, metadataVersion: expectedVersion },
                 data: {
                     metadata: metadata,
-                    metadataVersion: expectedVersion + 1
+                    metadataVersion: expectedVersion + 1,
+                    active: true,
                 }
             });
             if (count === 0) {
@@ -142,6 +146,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
         thinking?: boolean;
         compressing?: boolean;
         hud?: Record<string, unknown>;
+        permissionMode?: string;
+        currentModel?: string;
     }) => {
         try {
             // Track metrics
@@ -161,7 +167,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 return;
             }
 
-            const { sid, thinking, compressing, hud } = data;
+            const { sid, thinking, compressing, hud, permissionMode, currentModel } = data;
 
             // Check session validity using cache
             const isValid = await activityCache.isSessionValid(sid, userId);
@@ -173,7 +179,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             activityCache.queueSessionUpdate(sid, t);
 
             // Emit session activity update
-            const sessionActivity = buildSessionActivityEphemeral(sid, true, t, thinking || false, compressing || false, hud);
+            const sessionActivity = buildSessionActivityEphemeral(sid, true, t, thinking || false, compressing || false, hud, permissionMode, currentModel);
             eventRouter.emitEphemeral({
                 userId,
                 payload: sessionActivity,

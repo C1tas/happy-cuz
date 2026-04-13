@@ -1,6 +1,5 @@
 import { AgentContentView } from '@/components/AgentContentView';
 import { AgentInput } from '@/components/AgentInput';
-import { SessionHudBar } from '@/components/SessionHudBar';
 import { layout } from '@/components/layout';
 import {
     getAvailableModels,
@@ -93,6 +92,7 @@ export const SessionView = React.memo((props: { id: string }) => {
             subtitle: session.metadata?.path ? formatPathRelativeToHome(session.metadata.path, session.metadata?.homeDir) : undefined,
             avatarId: getSessionAvatarId(session),
             onAvatarPress: () => router.push(`/session/${sessionId}/info`),
+            onInfoPress: () => router.push(`/session/${sessionId}/info`),
             isConnected: isConnected,
             flavor: session.metadata?.flavor || null,
             tintColor: isConnected ? '#000' : '#8E8E93'
@@ -396,7 +396,9 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                 text: sessionStatus.statusText,
                 color: sessionStatus.statusColor,
                 dotColor: sessionStatus.statusDotColor,
-                isPulsing: sessionStatus.isPulsing
+                isPulsing: sessionStatus.isPulsing,
+                cliPermissionMode: session.cliPermissionMode ?? undefined,
+                isCliLocalMode: session.agentState?.controlledByUser === true,
             }}
             blockSend={isDisconnected}
             onSend={() => {
@@ -427,6 +429,11 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                 contextSize: session.latestUsage.contextSize
             } : undefined}
             alwaysShowContextSize={alwaysShowContextSize}
+            hudData={session.hud ? {
+                model: session.hud.model,
+                contextPercent: session.hud.contextPercent,
+                completedTools: session.hud.completedTools,
+            } : null}
         />
     );
 
@@ -441,7 +448,6 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
     const input = isInactiveArchivedSession ? (
         <>
             {archivedHint}
-            <SessionHudBar sessionId={sessionId} />
             {composer}
         </>
     ) : (
@@ -451,7 +457,6 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                     <ResumeCommandHint resumeCommandBlock={resumeCommandBlock} />
                 </CenteredInputWidth>
             )}
-            <SessionHudBar sessionId={sessionId} />
             {composer}
         </>
     );

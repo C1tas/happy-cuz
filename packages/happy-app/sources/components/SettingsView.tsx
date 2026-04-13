@@ -33,6 +33,8 @@ export const SettingsView = React.memo(function SettingsView() {
     const { theme } = useUnistyles();
     const router = useRouter();
     const appVersion = Constants.expoConfig?.version || '1.0.0';
+    const gitCommit = (Constants.expoConfig?.extra as any)?.app?.gitCommitHash;
+    const displayVersion = gitCommit ? `${appVersion} (${gitCommit})` : appVersion;
     const auth = useAuth();
     const [devModeEnabled, setDevModeEnabled] = useLocalSettingMutable('devModeEnabled');
     const isPro = __DEV__ || useEntitlement('pro');
@@ -402,7 +404,7 @@ export const SettingsView = React.memo(function SettingsView() {
                 )}
                 <Item
                     title={t('common.version')}
-                    detail={appVersion}
+                    detail={displayVersion}
                     icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.textSecondary} />}
                     onPress={handleVersionClick}
                     showChevron={false}

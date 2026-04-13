@@ -55,6 +55,10 @@ interface AgentInputProps {
             codex: boolean | null;
             gemini?: boolean | null;
         };
+        /** CLI-reported permission mode from keepAlive */
+        cliPermissionMode?: string;
+        /** Whether CLI is in local (terminal) mode — CLI state takes priority */
+        isCliLocalMode?: boolean;
     };
     autocompletePrefixes: string[];
     autocompleteSuggestions: (query: string) => Promise<{ key: string, text: string, component: React.ElementType }[]>;
@@ -74,6 +78,11 @@ interface AgentInputProps {
     currentPath?: string | null;
     onPathClick?: () => void;
     blockSend?: boolean;
+    hudData?: {
+        model?: string;
+        contextPercent?: number;
+        completedTools?: number;
+    } | null;
     isSendDisabled?: boolean;
     isSending?: boolean;
     minHeight?: number;
@@ -926,6 +935,42 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     )}
                                 </>
                             )}
+                            {/* HUD segments — model, context%, completed tools */}
+                            {props.hudData && props.connectionStatus && (
+                                <>
+                                    {props.hudData.model && (
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: theme.colors.textSecondary,
+                                            ...Typography.mono()
+                                        }} numberOfLines={1}>
+                                            {props.hudData.model}
+                                        </Text>
+                                    )}
+                                    {props.hudData.contextPercent !== undefined && (
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: props.hudData.contextPercent < 50
+                                                ? theme.colors.success
+                                                : props.hudData.contextPercent < 80
+                                                    ? theme.colors.warning
+                                                    : theme.colors.textDestructive,
+                                            ...Typography.mono()
+                                        }} numberOfLines={1}>
+                                            {Math.round(props.hudData.contextPercent)}%
+                                        </Text>
+                                    )}
+                                    {(props.hudData.completedTools ?? 0) > 0 && (
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: theme.colors.textSecondary,
+                                            ...Typography.mono()
+                                        }} numberOfLines={1}>
+                                            {props.hudData.completedTools}T
+                                        </Text>
+                                    )}
+                                </>
+                            )}
                             {contextWarning && (
                                 <Text style={{
                                     fontSize: 11,
@@ -939,17 +984,36 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </View>
                         {/* Permission badge — only shown when non-default */}
                         {displayPermissionMode && permissionModeKey !== 'default' && (() => {
-                            const permColor = isSandboxedYoloMode ? '#4169E1' :
-                                permissionModeKey === 'acceptEdits' ? theme.colors.permission.acceptEdits :
-                                    permissionModeKey === 'bypassPermissions' ? theme.colors.permission.bypass :
-                                        permissionModeKey === 'plan' ? theme.colors.permission.plan :
-                                            permissionModeKey === 'read-only' ? theme.colors.permission.readOnly :
-                                                permissionModeKey === 'safe-yolo' ? theme.colors.permission.safeYolo :
-                                                    permissionModeKey === 'yolo' ? theme.colors.permission.yolo :
-                                                        theme.colors.textSecondary;
+                            const cliMode = props.connectionStatus?.cliPermissionMode;
+                            const isLocal = props.connectionStatus?.isCliLocalMode === true;
+                            // In local mode, CLI is authoritative — show CLI-reported mode
+                            // In remote mode, App is authoritative — show App-selected mode with sync indicator
+                            const effectiveKey = (isLocal && cliMode) ? cliMode : permissionModeKey;
+                            const isSyncing = !isLocal && !!cliMode && cliMode !== permissionModeKey;
+
+                            const getPermColor = (key: string) => {
+                                const isSandboxedYolo = isSandboxEnabled && (key === 'bypassPermissions' || key === 'yolo');
+                                if (isSandboxedYolo) return '#4169E1';
+                                switch (key) {
+                                    case 'acceptEdits': return theme.colors.permission.acceptEdits;
+                                    case 'bypassPermissions': return theme.colors.permission.bypass;
+                                    case 'plan': return theme.colors.permission.plan;
+                                    case 'read-only': return theme.colors.permission.readOnly;
+                                    case 'safe-yolo': return theme.colors.permission.safeYolo;
+                                    case 'yolo': return theme.colors.permission.yolo;
+                                    default: return theme.colors.textSecondary;
+                                }
+                            };
+                            const permColor = getPermColor(effectiveKey);
                             const permIcon: 'play-forward' | 'pause' =
-                                permissionModeKey === 'plan' || permissionModeKey === 'read-only'
+                                effectiveKey === 'plan' || effectiveKey === 'read-only'
                                     ? 'pause' : 'play-forward';
+
+                            // In local mode with CLI mode override, find the display name from available modes
+                            const effectiveName = (isLocal && cliMode && cliMode !== permissionModeKey)
+                                ? (availableModes.find(m => m.key === cliMode)?.name ?? cliMode)
+                                : displayPermissionMode.name;
+
                             return (
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                                     <Ionicons name={permIcon} size={11} color={permColor} />
@@ -958,8 +1022,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         color: permColor,
                                         ...Typography.default()
                                     }}>
-                                        {withSandboxSuffix(displayPermissionMode.name, permissionModeKey)}
+                                        {withSandboxSuffix(effectiveName, effectiveKey)}
                                     </Text>
+                                    {isSyncing && (
+                                        <Text style={{
+                                            fontSize: 10,
+                                            color: theme.colors.textSecondary,
+                                            opacity: 0.7,
+                                            ...Typography.mono()
+                                        }}>
+                                            (cli:{cliMode})
+                                        </Text>
+                                    )}
                                 </View>
                             );
                         })()}

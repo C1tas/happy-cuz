@@ -1,3 +1,9 @@
+const { execSync } = require('child_process');
+let gitCommitHash = '';
+try {
+    gitCommitHash = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+} catch { /* git not available in EAS build */ }
+
 const variant = process.env.APP_ENV || 'development';
 const name = {
     development: "Happy (dev)",
@@ -11,6 +17,9 @@ const bundleId = {
     production: "com.ex3ndr.happy",
     'prod-cuz': "com.c1tas.happycuz"
 }[variant];
+const googleServicesFile = variant === 'prod-cuz'
+    ? "./google-services-cuz.json"
+    : "./google-services.json";
 // const stagingElevenLabsAgentId = 'agent_7801k2c0r5hjfraa1kdbytpvs6yt';
 const productionElevenLabsAgentId = 'agent_6701k211syvvegba4kt7m68nxjmw';
 const elevenLabsAgentId = {
@@ -29,7 +38,7 @@ const consoleLoggingDefault = {
 export default {
     expo: {
         name,
-        slug: "happy",
+        slug: variant === 'prod-cuz' ? "happy-cuz" : "happy",
         version: "1.7.0",
         runtimeVersion: "21",
         orientation: "default",
@@ -70,7 +79,7 @@ export default {
                 "android.permission.READ_MEDIA_VIDEO",
             ],
             package: bundleId,
-            googleServicesFile: "./google-services.json",
+            googleServicesFile: googleServicesFile,
             intentFilters: (variant === 'production' || variant === 'prod-cuz') ? [
                 {
                     "action": "VIEW",
@@ -166,7 +175,9 @@ export default {
             ]
         ],
         updates: {
-            url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+            url: variant === 'prod-cuz'
+                ? "https://u.expo.dev/06d51150-40e0-40fc-872b-edcefa4284c2"
+                : "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
             requestHeaders: {
                 "expo-channel-name": "production"
             }
@@ -179,7 +190,9 @@ export default {
                 root: "./sources/app"
             },
             eas: {
-                projectId: "4558dd3d-cd5a-47cd-bad9-e591a241cc06"
+                projectId: variant === 'prod-cuz'
+                    ? "06d51150-40e0-40fc-872b-edcefa4284c2"
+                    : "4558dd3d-cd5a-47cd-bad9-e591a241cc06"
             },
             app: {
                 postHogKey: process.env.EXPO_PUBLIC_POSTHOG_API_KEY,
@@ -188,8 +201,9 @@ export default {
                 revenueCatStripeKey: process.env.EXPO_PUBLIC_REVENUE_CAT_STRIPE,
                 elevenLabsAgentId,
                 consoleLoggingDefault,
+                gitCommitHash,
             }
         },
-        owner: "bulkacorp"
+        owner: variant === 'prod-cuz' ? "kasirwqks-organization" : "bulkacorp"
     }
 };

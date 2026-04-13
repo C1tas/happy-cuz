@@ -77,8 +77,6 @@ export const RemoteModeDisplay: React.FC<RemoteModeDisplayProps> = ({ messageBuf
                 // Second space, switch to local
                 resetConfirmation()
                 setActionInProgress('switching')
-                // Small delay to show the status message
-                await new Promise(resolve => setTimeout(resolve, 100))
                 onSwitchToLocal?.()
             } else {
                 // First space, show confirmation

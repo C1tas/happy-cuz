@@ -545,19 +545,42 @@ describe('Smoke: Full test suite runs', () => {
 
     });
 
-    it('config loads with correct defaults', () => {
+    it('config exits with error when HAPPY_SERVER_URL is not set', () => {
         const origUrl = process.env.HAPPY_SERVER_URL;
         const origHome = process.env.HAPPY_HOME_DIR;
         delete process.env.HAPPY_SERVER_URL;
         delete process.env.HAPPY_HOME_DIR;
 
+        const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {
+            throw new Error('process.exit');
+        }) as any);
+        const mockError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            expect(() => loadConfig()).toThrow('process.exit');
+            expect(mockExit).toHaveBeenCalledWith(1);
+        } finally {
+            mockExit.mockRestore();
+            mockError.mockRestore();
+            if (origUrl !== undefined) process.env.HAPPY_SERVER_URL = origUrl;
+            if (origHome !== undefined) process.env.HAPPY_HOME_DIR = origHome;
+        }
+    });
+
+    it('config loads with HAPPY_SERVER_URL set', () => {
+        const origUrl = process.env.HAPPY_SERVER_URL;
+        const origHome = process.env.HAPPY_HOME_DIR;
+        process.env.HAPPY_SERVER_URL = 'https://test.example.com';
+        delete process.env.HAPPY_HOME_DIR;
+
         try {
             const config = loadConfig();
-            expect(config.serverUrl).toBe('https://api.cluster-fluster.com');
+            expect(config.serverUrl).toBe('https://test.example.com');
             expect(config.homeDir).toContain('.happy');
             expect(config.credentialPath).toContain('agent.key');
         } finally {
             if (origUrl !== undefined) process.env.HAPPY_SERVER_URL = origUrl;
+            else delete process.env.HAPPY_SERVER_URL;
             if (origHome !== undefined) process.env.HAPPY_HOME_DIR = origHome;
         }
     });

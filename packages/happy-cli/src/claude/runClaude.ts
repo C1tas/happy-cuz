@@ -6,7 +6,7 @@ import { logger } from '@/ui/logger';
 import { loop } from '@/claude/loop';
 import { AgentState, Metadata } from '@/api/types';
 import packageJson from '../../package.json';
-import { Credentials, readSettings } from '@/persistence';
+import { Credentials, readSettings, lookupHappySessionForAgent } from '@/persistence';
 import { EnhancedMode, PermissionMode } from './loop';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
@@ -28,6 +28,8 @@ import { claudeLocal } from '@/claude/claudeLocal';
 import { createSessionScanner } from '@/claude/utils/sessionScanner';
 import { Session } from './session';
 import { applySandboxPermissionPolicy, resolveInitialClaudePermissionMode } from './utils/permissionMode';
+import { reconnectToExistingSession } from '@/resume/resolveHappySession';
+import { getGitCommitHash } from '@/utils/gitCommit';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -47,6 +49,8 @@ export interface StartOptions {
     remoteColor?: boolean
     /** Disable alternate screen buffer in remote mode (default: false = use alt screen) */
     noAltScreen?: boolean
+    /** Existing Happy session ID to reconnect to instead of creating a new session */
+    happySessionId?: string
 }
 
 export async function runClaude(credentials: Credentials, options: StartOptions = {}): Promise<void> {
@@ -119,8 +123,37 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         flavor: 'claude',
         sandbox: sandboxConfig?.enabled ? sandboxConfig : null,
         dangerouslySkipPermissions,
+        gitCommitHash: getGitCommitHash() ?? null,
     };
-    const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+
+    // Safety net: if resuming a Claude session without explicit happy session ID,
+    // check local mapping to prevent creating a duplicate Happy session
+    if (!options.happySessionId && options.claudeArgs) {
+        const resumeIdx = options.claudeArgs.indexOf('--resume');
+        if (resumeIdx !== -1 && resumeIdx + 1 < options.claudeArgs.length) {
+            const claudeSessionId = options.claudeArgs[resumeIdx + 1];
+            if (claudeSessionId && !claudeSessionId.startsWith('-')) {
+                const mappedHappyId = await lookupHappySessionForAgent(claudeSessionId);
+                if (mappedHappyId) {
+                    logger.debug(`[CLAUDE] Local mapping found: claude=${claudeSessionId} -> happy=${mappedHappyId}`);
+                    options.happySessionId = mappedHappyId;
+                }
+            }
+        }
+    }
+
+    let response: Awaited<ReturnType<typeof reconnectToExistingSession>> | Awaited<ReturnType<typeof api.getOrCreateSession>>;
+    if (options.happySessionId) {
+        response = await reconnectToExistingSession(options.happySessionId);
+        if (!response) {
+            // Reconnect failed (timeout/network) — do NOT create a new session.
+            // Let response stay null to enter offline reconnection mode, which will
+            // keep retrying reconnectToExistingSession until the server is available.
+            logger.debug(`[CLAUDE] Reconnect to ${options.happySessionId} failed, entering offline mode with reconnection`);
+        }
+    } else {
+        response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+    }
 
     // Handle server unreachable case - run Claude locally with hot reconnection
     // Note: connectionState.notifyOffline() was already called by api.ts with error details
@@ -130,7 +163,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         const reconnection = startOfflineReconnection({
             serverUrl: configuration.serverUrl,
             onReconnected: async () => {
-                const resp = await api.getOrCreateSession({ tag: randomUUID(), metadata, state });
+                // If resuming an existing Happy session, reconnect to it — never create a new one
+                const resp = options.happySessionId
+                    ? await reconnectToExistingSession(options.happySessionId)
+                    : await api.getOrCreateSession({ tag: randomUUID(), metadata, state });
                 if (!resp) throw new Error('Server unavailable');
                 const session = api.sessionSyncClient(resp);
                 const scanner = await createSessionScanner({
@@ -182,12 +218,21 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug('[START] Failed to report to daemon (may not be running):', error);
     }
 
+    // Create realtime session — single instance used for ALL metadata/state operations
+    const session = api.sessionSyncClient(response);
+
+    // For reconnected sessions, push fresh metadata via the main session client
+    if (options.happySessionId) {
+        logger.debug(`[CLAUDE] Reconnected to existing session: ${response.id}, pushing fresh metadata`);
+        session.updateMetadata(() => metadata);
+    }
+
     // Extract SDK metadata in background and update session when ready
     extractSDKMetadataAsync(async (sdkMetadata) => {
         logger.debug('[start] SDK metadata extracted, updating session:', sdkMetadata);
         try {
             // Update session metadata with tools and slash commands
-            api.sessionSyncClient(response).updateMetadata((currentMetadata) => ({
+            session.updateMetadata((currentMetadata) => ({
                 ...currentMetadata,
                 tools: sdkMetadata.tools,
                 slashCommands: sdkMetadata.slashCommands
@@ -197,9 +242,6 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             logger.debug('[start] Failed to update session metadata:', error);
         }
     });
-
-    // Create realtime session
-    const session = api.sessionSyncClient(response);
 
     // Start Happy MCP server
     const happyServer = await startHappyServer(session);
@@ -274,6 +316,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         if (message.meta?.permissionMode) {
             messagePermissionMode = applySandboxPermissionPolicy(message.meta.permissionMode, sandboxEnabled);
             currentPermissionMode = messagePermissionMode;
+            currentSession?.onPermissionModeChange(currentPermissionMode!);
             logger.debug(`[loop] Permission mode updated from user message to: ${currentPermissionMode}`);
         } else {
             logger.debug(`[loop] User message received with no permission mode override, using current: ${currentPermissionMode}`);
@@ -284,6 +327,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         if (message.meta?.hasOwnProperty('model')) {
             messageModel = message.meta.model || undefined; // null becomes undefined
             currentModel = messageModel;
+            currentSession?.onModelChange(currentModel);
             logger.debug(`[loop] Model updated from user message: ${messageModel || 'reset to default'}`);
         } else {
             logger.debug(`[loop] User message received with no model override, using current: ${currentModel || 'default'}`);
@@ -481,6 +525,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         jsRuntime: options.jsRuntime,
         remoteColor: options.remoteColor,
         noAltScreen: options.noAltScreen,
+        suppressEmoji: settings.remoteTerminal?.suppressEmoji,
     });
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak

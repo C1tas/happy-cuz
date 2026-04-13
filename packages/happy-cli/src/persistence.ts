@@ -42,6 +42,10 @@ interface Settings {
   daemonAutoStartWhenRunningHappy?: boolean
   chromeMode?: boolean
   sandboxConfig?: SandboxConfig
+  remoteTerminal?: {
+    suppressEmoji?: boolean
+    forceNoColor?: boolean
+  }
 }
 
 const defaultSettings: Settings = {
@@ -391,5 +395,164 @@ export async function releaseDaemonLock(lockHandle: FileHandle): Promise<void> {
       unlinkSync(configuration.daemonLockFile);
     }
   } catch { }
+}
+
+//
+// Session Mapping (agentSessionId -> happySessionId)
+//
+
+export interface SessionMappingEntry {
+  happySessionId: string;
+  createdAt: string;
+  lastUsedAt: string;
+  flavor: string;
+}
+
+export interface SessionMappingFile {
+  mappings: Record<string, SessionMappingEntry>;
+}
+
+/**
+ * Read session mapping from local file.
+ * Returns empty mappings if file is missing or corrupted.
+ */
+export async function readSessionMapping(): Promise<SessionMappingFile> {
+  try {
+    if (!existsSync(configuration.sessionMappingFile)) {
+      return { mappings: {} };
+    }
+    const content = await readFile(configuration.sessionMappingFile, 'utf-8');
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed.mappings === 'object') {
+      return parsed as SessionMappingFile;
+    }
+    return { mappings: {} };
+  } catch {
+    return { mappings: {} };
+  }
+}
+
+/**
+ * Atomically update session mapping with multi-process safety via file locking.
+ * Uses the same lock pattern as updateSettings.
+ */
+export async function updateSessionMapping(
+  updater: (current: SessionMappingFile) => SessionMappingFile
+): Promise<SessionMappingFile> {
+  const LOCK_RETRY_INTERVAL_MS = 100;
+  const MAX_LOCK_ATTEMPTS = 50;
+  const STALE_LOCK_TIMEOUT_MS = 10000;
+
+  const lockFile = configuration.sessionMappingLockFile;
+  const tmpFile = configuration.sessionMappingFile + '.tmp';
+  let fileHandle: FileHandle | undefined;
+  let attempts = 0;
+
+  while (attempts < MAX_LOCK_ATTEMPTS) {
+    try {
+      fileHandle = await open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+      break;
+    } catch (err: any) {
+      if (err.code === 'EEXIST') {
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
+        try {
+          const stats = await stat(lockFile);
+          if (Date.now() - stats.mtimeMs > STALE_LOCK_TIMEOUT_MS) {
+            await unlink(lockFile).catch(() => { });
+          }
+        } catch { }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (!fileHandle) {
+    throw new Error(`Failed to acquire session mapping lock after ${MAX_LOCK_ATTEMPTS * LOCK_RETRY_INTERVAL_MS / 1000} seconds`);
+  }
+
+  try {
+    const current = await readSessionMapping();
+    const updated = updater(current);
+
+    if (!existsSync(configuration.happyHomeDir)) {
+      await mkdir(configuration.happyHomeDir, { recursive: true });
+    }
+
+    await writeFile(tmpFile, JSON.stringify(updated, null, 2));
+    await rename(tmpFile, configuration.sessionMappingFile);
+
+    return updated;
+  } finally {
+    await fileHandle.close();
+    await unlink(lockFile).catch(() => { });
+  }
+}
+
+/**
+ * Register a binding between an agent session ID (Claude/Codex) and a Happy session ID.
+ * Idempotent: updates lastUsedAt if the binding already exists for the same happySessionId.
+ * Refuses to overwrite if the agent session is already bound to a different Happy session.
+ */
+export async function registerSessionMapping(
+  agentSessionId: string,
+  happySessionId: string,
+  flavor: string
+): Promise<void> {
+  await updateSessionMapping((current) => {
+    const existing = current.mappings[agentSessionId];
+    if (existing && existing.happySessionId !== happySessionId) {
+      logger.debug(`[PERSISTENCE] Session mapping conflict: agent=${agentSessionId} already bound to happy=${existing.happySessionId}, refusing rebind to ${happySessionId}`);
+      return current;
+    }
+
+    const now = new Date().toISOString();
+    return {
+      mappings: {
+        ...current.mappings,
+        [agentSessionId]: {
+          happySessionId,
+          createdAt: existing?.createdAt ?? now,
+          lastUsedAt: now,
+          flavor,
+        },
+      },
+    };
+  });
+}
+
+/**
+ * Look up which Happy session an agent session ID is bound to.
+ * Returns null if no mapping exists.
+ */
+export async function lookupHappySessionForAgent(agentSessionId: string): Promise<string | null> {
+  const mapping = await readSessionMapping();
+  const entry = mapping.mappings[agentSessionId];
+  return entry?.happySessionId ?? null;
+}
+
+/**
+ * Remove session mapping entries older than maxAgeMs.
+ * Returns the number of pruned entries.
+ */
+export async function pruneSessionMappings(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<number> {
+  const cutoff = Date.now() - maxAgeMs;
+  let pruned = 0;
+
+  await updateSessionMapping((current) => {
+    const remaining: Record<string, SessionMappingEntry> = {};
+    for (const [key, entry] of Object.entries(current.mappings)) {
+      const lastUsed = new Date(entry.lastUsedAt).getTime();
+      if (isNaN(lastUsed) || lastUsed < cutoff) {
+        pruned++;
+      } else {
+        remaining[key] = entry;
+      }
+    }
+    return { mappings: remaining };
+  });
+
+  return pruned;
 }
 

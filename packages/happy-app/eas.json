@@ -49,6 +49,14 @@
         "APP_ENV": "production",
         "SHARP_IGNORE_GLOBAL_LIBVIPS": "1"
       }
+    },
+    "prod-cuz": {
+      "autoIncrement": true,
+      "channel": "production",
+      "env": {
+        "APP_ENV": "prod-cuz",
+        "SHARP_IGNORE_GLOBAL_LIBVIPS": "1"
+      }
     }
   },
   "submit": {

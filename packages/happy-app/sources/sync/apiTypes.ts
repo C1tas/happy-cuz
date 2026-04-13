@@ -171,6 +171,8 @@ export const ApiEphemeralActivityUpdateSchema = z.object({
     thinking: z.boolean(),
     compressing: z.boolean().optional(),
     hud: SessionHudDataSchema.optional(),
+    permissionMode: z.string().optional(),
+    currentModel: z.string().optional(),
 });
 
 export const ApiEphemeralUsageUpdateSchema = z.object({

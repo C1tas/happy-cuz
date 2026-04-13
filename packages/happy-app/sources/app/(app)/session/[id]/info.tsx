@@ -130,7 +130,11 @@ function SessionInfoContent({ session }: { session: Session }) {
     const sessionName = getSessionName(session);
     const sessionStatus = useSessionStatus(session);
     const {
+        canShowRestart,
         canShowResume,
+        restartSession,
+        restartSessionSubtitle,
+        restartingSession,
         resumeSession,
         resumeSessionSubtitle,
     } = useSessionQuickActions(session);
@@ -355,6 +359,15 @@ function SessionInfoContent({ session }: { session: Session }) {
                             onPress={resumeSession}
                         />
                     )}
+                    {canShowRestart && (
+                        <Item
+                            title={t('sessionInfo.restartSession')}
+                            subtitle={restartSessionSubtitle}
+                            icon={<Ionicons name="refresh-circle-outline" size={29} color="#FF9500" />}
+                            onPress={restartSession}
+                            loading={restartingSession}
+                        />
+                    )}
                     {sessionStatus.isConnected && (
                         <Item
                             title={t('sessionInfo.archiveSession')}
@@ -389,7 +402,9 @@ function SessionInfoContent({ session }: { session: Session }) {
                         {session.metadata.version && (
                             <Item
                                 title={t('sessionInfo.cliVersion')}
-                                subtitle={session.metadata.version}
+                                subtitle={session.metadata.gitCommitHash
+                                    ? `${session.metadata.version} (${session.metadata.gitCommitHash})`
+                                    : session.metadata.version}
                                 detail={isCliOutdated ? '⚠️' : undefined}
                                 icon={<Ionicons name="git-branch-outline" size={29} color={isCliOutdated ? "#FF9500" : "#5856D6"} />}
                                 showChevron={false}

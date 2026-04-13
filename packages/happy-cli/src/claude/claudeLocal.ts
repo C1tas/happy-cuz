@@ -184,8 +184,14 @@ export async function claudeLocal(opts: {
 
     // Spawn the process
     try {
-        // Start the interactive process
+        // Pause stdin before handing off to child — no data events can fire while paused,
+        // so there is no window for keystroke echoing even though we exit raw mode here.
         process.stdin.pause();
+        // Normalize terminal state — safe because pause() prevents data delivery.
+        // The child (Claude Code) sets its own modes via tcsetattr on the inherited fd.
+        if (process.stdin.isTTY) {
+            try { process.stdin.setRawMode(false); } catch { /* stdin may be closed */ }
+        }
         await new Promise<void>((r, reject) => {
             const args: string[] = []
 

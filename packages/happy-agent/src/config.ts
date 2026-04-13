@@ -8,7 +8,13 @@ export type Config = {
 };
 
 export function loadConfig(): Config {
-    const serverUrl = (process.env.HAPPY_SERVER_URL ?? 'https://api.cluster-fluster.com').replace(/\/+$/, '');
+    const rawServerUrl = process.env.HAPPY_SERVER_URL;
+    if (!rawServerUrl) {
+        console.error('\x1b[31m\x1b[1m[FATAL]\x1b[0m HAPPY_SERVER_URL environment variable is not set.');
+        console.error('  Export it before running happy-agent: export HAPPY_SERVER_URL=https://your-server.com');
+        process.exit(1);
+    }
+    const serverUrl = rawServerUrl.replace(/\/+$/, '');
     const homeDir = process.env.HAPPY_HOME_DIR ?? join(homedir(), '.happy');
     const credentialPath = join(homeDir, 'agent.key');
     return { serverUrl, homeDir, credentialPath };

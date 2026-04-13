@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Crypto Benchmark: @noble/ciphers vs crypto.subtle</title>
+<style>
+body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+pre { white-space: pre-wrap; line-height: 1.6; }
+.pass { color: #4caf50; }
+.fail { color: #f44336; }
+.warn { color: #ff9800; }
+.head { color: #64b5f6; font-weight: bold; }
+button { padding: 8px 16px; font-size: 14px; margin: 4px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h2>Crypto Performance Benchmark</h2>
+<p>Secure context: <span id="secure"></span> | crypto.subtle: <span id="subtle"></span> | crypto.randomUUID: <span id="ruuid"></span></p>
+<button onclick="runAll()">Run All Benchmarks</button>
+<pre id="out"></pre>
+
+<script type="module">
+import { gcm } from 'https://esm.sh/@noble/ciphers@2.1.1/aes.js';
+
+const $out = document.getElementById('out');
+const log = (msg, cls) => { $out.innerHTML += cls ? `<span class="${cls}">${msg}</span>\n` : msg + '\n'; };
+const head = (msg) => log(`\n━━━ ${msg} ━━━`, 'head');
+
+// --- detect capabilities ---
+const isSecure = window.isSecureContext;
+const hasSubtle = !!(crypto?.subtle);
+const hasRandomUUID = typeof crypto?.randomUUID === 'function';
+document.getElementById('secure').textContent = isSecure ? '✅ Yes' : '❌ No';
+document.getElementById('subtle').textContent = hasSubtle ? '✅ Yes' : '❌ No';
+document.getElementById('ruuid').textContent = hasRandomUUID ? '✅ Yes' : '❌ No';
+
+// --- helpers ---
+function randomBytes(n) { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; }
+function toB64(buf) { return btoa(String.fromCharCode(...buf)); }
+function fromB64(s) { const b = atob(s); const a = new Uint8Array(b.length); for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i); return a; }
+
+// --- @noble/ciphers AES-GCM ---
+function nobleEncrypt(key, plaintext) {
+    const iv = randomBytes(12);
+    const aes = gcm(key, iv);
+    const ct = aes.encrypt(plaintext);
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv); out.set(ct, 12);
+    return out;
+}
+function nobleDecrypt(key, combined) {
+    const iv = combined.slice(0, 12);
+    const ct = combined.slice(12);
+    return gcm(key, iv).decrypt(ct);
+}
+
+// --- crypto.subtle AES-GCM ---
+async function subtleEncrypt(cryptoKey, plaintext) {
+    const iv = randomBytes(12);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, plaintext));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv); out.set(ct, 12);
+    return out;
+}
+async function subtleDecrypt(cryptoKey, combined) {
+    const iv = combined.slice(0, 12);
+    const ct = combined.slice(12);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, ct));
+}
+
+// --- UUID ---
+function uuidManual() {
+    const b = randomBytes(16);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, x => x.toString(16).padStart(2,'0')).join('');
+    return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+
+// --- benchmark runner ---
+async function bench(name, fn, iterations) {
+    // warmup
+    for (let i = 0; i < Math.min(10, iterations); i++) await fn();
+    const t0 = performance.now();
+    for (let i = 0; i < iterations; i++) await fn();
+    const elapsed = performance.now() - t0;
+    const perOp = elapsed / iterations;
+    return { name, elapsed: elapsed.toFixed(1), perOp: perOp.toFixed(3), iterations };
+}
+
+function fmtResult(r) {
+    return `  ${r.name.padEnd(35)} ${r.iterations.toString().padStart(6)} ops  ${r.elapsed.padStart(8)}ms total  ${r.perOp.padStart(8)}ms/op`;
+}
+
+// --- main ---
+window.runAll = async function() {
+    $out.innerHTML = '';
+    log('Starting benchmarks...\n');
+
+    // =========== AES-GCM ===========
+    const key = randomBytes(32);
+    let cryptoKey = null;
+    if (hasSubtle) {
+        cryptoKey = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt','decrypt']);
+    }
+
+    const sizes = [
+        { label: '256 B (short message)',   size: 256 },
+        { label: '2 KB (typical message)',  size: 2048 },
+        { label: '16 KB (large message)',   size: 16384 },
+        { label: '64 KB (very large)',      size: 65536 },
+    ];
+
+    for (const { label, size } of sizes) {
+        head(`AES-GCM — ${label}`);
+        const plain = randomBytes(size);
+        const encrypted_noble = nobleEncrypt(key, plain);
+
+        // --- encrypt ---
+        const N_ENC = size > 16000 ? 500 : 2000;
+        const rNobleEnc = await bench('@noble encrypt', () => nobleEncrypt(key, plain), N_ENC);
+        log(fmtResult(rNobleEnc));
+
+        if (cryptoKey) {
+            const rSubtleEnc = await bench('crypto.subtle encrypt', () => subtleEncrypt(cryptoKey, plain), N_ENC);
+            log(fmtResult(rSubtleEnc));
+            const ratio = (parseFloat(rNobleEnc.perOp) / parseFloat(rSubtleEnc.perOp)).toFixed(1);
+            log(`  → @noble is ${ratio}x slower than crypto.subtle`, ratio > 5 ? 'fail' : ratio > 2 ? 'warn' : 'pass');
+        } else {
+            log('  crypto.subtle: N/A (non-secure context)', 'warn');
+        }
+
+        // --- decrypt ---
+        const N_DEC = size > 16000 ? 500 : 2000;
+        const rNobleDec = await bench('@noble decrypt', () => nobleDecrypt(key, encrypted_noble), N_DEC);
+        log(fmtResult(rNobleDec));
+
+        if (cryptoKey) {
+            const encrypted_subtle = await subtleEncrypt(cryptoKey, plain);
+            const rSubtleDec = await bench('crypto.subtle decrypt', () => subtleDecrypt(cryptoKey, encrypted_subtle), N_DEC);
+            log(fmtResult(rSubtleDec));
+            const ratio = (parseFloat(rNobleDec.perOp) / parseFloat(rSubtleDec.perOp)).toFixed(1);
+            log(`  → @noble is ${ratio}x slower than crypto.subtle`, ratio > 5 ? 'fail' : ratio > 2 ? 'warn' : 'pass');
+        }
+    }
+
+    // =========== Batch decrypt simulation ===========
+    head('Batch decrypt simulation (50 messages × 2KB each — session open)');
+    const messages50 = Array.from({length: 50}, () => nobleEncrypt(key, randomBytes(2048)));
+    const rBatchNoble = await bench('@noble batch (50 msgs)', () => {
+        for (const m of messages50) nobleDecrypt(key, m);
+    }, 100);
+    log(fmtResult(rBatchNoble));
+
+    if (cryptoKey) {
+        const messages50s = [];
+        for (const m of messages50) messages50s.push(await subtleEncrypt(cryptoKey, fromB64(toB64(m.slice(12)))));
+        // Use noble-encrypted messages for fair comparison (same data)
+        const rBatchSubtle = await bench('crypto.subtle batch (50 msgs)', async () => {
+            for (const m of messages50) {
+                const iv = m.slice(0,12); const ct = m.slice(12);
+                await crypto.subtle.decrypt({name:'AES-GCM',iv}, cryptoKey, ct);
+            }
+        }, 100);
+        log(fmtResult(rBatchSubtle));
+        const ratio = (parseFloat(rBatchNoble.perOp) / parseFloat(rBatchSubtle.perOp)).toFixed(1);
+        log(`  → Total wall time per session open: @noble ${rBatchNoble.perOp}ms vs subtle ${rBatchSubtle.perOp}ms (${ratio}x)`, ratio > 5 ? 'fail' : ratio > 2 ? 'warn' : 'pass');
+    }
+
+    // =========== UUID ===========
+    head('UUID generation');
+    const N_UUID = 10000;
+    const rManual = await bench('getRandomValues + format', () => uuidManual(), N_UUID);
+    log(fmtResult(rManual));
+
+    if (hasRandomUUID) {
+        const rNative = await bench('crypto.randomUUID()', () => crypto.randomUUID(), N_UUID);
+        log(fmtResult(rNative));
+        const ratio = (parseFloat(rManual.perOp) / parseFloat(rNative.perOp)).toFixed(1);
+        log(`  → Manual is ${ratio}x slower`, ratio > 5 ? 'fail' : ratio > 2 ? 'warn' : 'pass');
+    } else {
+        log('  crypto.randomUUID: N/A (non-secure context)', 'warn');
+    }
+
+    // =========== Summary ===========
+    head('Summary');
+    log('If @noble decrypt is < 0.1ms/op for 2KB messages, it adds ~5ms per 50-message session open.');
+    log('If > 0.5ms/op, it adds ~25ms+ and could be noticeable.');
+    log('UUID generation is trivial (<0.01ms/op) regardless of method.');
+    log('\nIf slowness persists, the bottleneck is likely NOT crypto — check:');
+    log('  1. Network latency (HTTP round-trips, WebSocket reconnects)');
+    log('  2. React re-renders (large message lists, unoptimized selectors)');
+    log('  3. JSON.parse of large decrypted payloads');
+    log('  4. Zustand store updates triggering cascading renders');
+    log('\nDone ✓');
+};
+</script>
+</body>
+</html>

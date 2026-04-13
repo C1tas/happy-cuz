@@ -373,6 +373,12 @@ export default function DevScreen() {
                     icon={<Ionicons name="information-circle-outline" size={28} color="#007AFF" />}
                     onPress={() => router.push('/dev/expo-constants')}
                 />
+                <Item
+                    title="Notification Test"
+                    subtitle="Push notification diagnostics and testing"
+                    icon={<Ionicons name="notifications-outline" size={28} color="#FF2D55" />}
+                    onPress={() => router.push('/dev/notification-test')}
+                />
             </ItemGroup>
 
             {/* Network */}

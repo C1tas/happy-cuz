@@ -587,6 +587,8 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
         unknownArgs.push('--dangerously-skip-permissions')
       } else if (arg === '--started-by') {
         options.startedBy = args[++i] as 'daemon' | 'terminal'
+      } else if (arg === '--happy-session-id') {
+        options.happySessionId = args[++i]
       } else if (arg === '--js-runtime') {
         const runtime = args[++i]
         if (runtime !== 'node' && runtime !== 'bun') {
@@ -644,6 +646,15 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     const chromeEnabled = chromeOverride ?? settings.chromeMode ?? false
     if (chromeEnabled) {
       options.claudeArgs = [...(options.claudeArgs || []), '--chrome']
+    }
+
+    // Default to --dangerously-skip-permissions unless explicitly set
+    // CLI always starts with bypassPermissions; App-side mode changes are applied per-turn
+    const allClaudeArgs = options.claudeArgs || []
+    const hasExplicitPermFlag = allClaudeArgs.some((a: string) =>
+      a === '--dangerously-skip-permissions' || a === '--permission-mode' || a.startsWith('--permission-mode='))
+    if (!hasExplicitPermFlag) {
+      options.claudeArgs = [...allClaudeArgs, '--dangerously-skip-permissions']
     }
 
     // Show help

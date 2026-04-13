@@ -85,8 +85,14 @@ export class PermissionHandler {
             });
         }
 
-        // Update permission mode (but not for ExitPlanMode — we restore prePlanMode instead)
+        // Update permission mode (but not for ExitPlanMode — handled below)
         if (response.mode && pending.toolName !== 'exit_plan_mode' && pending.toolName !== 'ExitPlanMode') {
+            if (response.mode === 'bypassPermissions') {
+                const metadata = this.session.client.getMetadata();
+                if (!metadata?.dangerouslySkipPermissions) {
+                    logger.warn('Bypass permissions requested from app but CLI was not started with --dangerously-skip-permissions. Applying bypass mode — all tools will be auto-approved via permissionHandler.');
+                }
+            }
             this.permissionMode = response.mode;
         }
 
@@ -96,8 +102,8 @@ export class PermissionHandler {
             logger.debug('Plan mode result received', response);
             if (response.approved) {
                 logger.debug('Plan approved - injecting PLAN_FAKE_RESTART');
-                // Restore the mode that was active before plan mode entry
-                const restoredMode = this.prePlanMode ?? 'default';
+                // Use explicitly chosen mode from app, fall back to pre-plan mode
+                const restoredMode = response.mode || this.prePlanMode || 'default';
                 this.permissionMode = restoredMode;
                 this.prePlanMode = null;
                 this.session.queue.unshift(PLAN_FAKE_RESTART, { permissionMode: restoredMode });

@@ -11,6 +11,7 @@ import type { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentState, Metadata, Session } from '@/api/types';
 import { configuration } from '@/configuration';
+import { reconnectToExistingSession } from '@/resume/resolveHappySession';
 import { createOfflineSessionStub } from '@/utils/offlineSessionStub';
 import { startOfflineReconnection } from '@/utils/serverConnectionErrors';
 
@@ -28,6 +29,8 @@ export interface SetupOfflineReconnectionOptions {
     state: AgentState;
     /** Initial API response (null if server unreachable) */
     response: Session | null;
+    /** If set, reconnect to this existing Happy session instead of creating a new one */
+    happySessionId?: string;
     /**
      * Callback invoked when session is swapped after reconnection.
      * Use this to update the session reference in the calling code.
@@ -75,7 +78,7 @@ export interface SetupOfflineReconnectionResult {
  * ```
  */
 export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions): SetupOfflineReconnectionResult {
-    const { api, sessionTag, metadata, state, response, onSessionSwap } = opts;
+    const { api, sessionTag, metadata, state, response, happySessionId, onSessionSwap } = opts;
 
     let session: ApiSessionClient;
     let reconnectionHandle: ReturnType<typeof startOfflineReconnection<ApiSessionClient>> | null = null;
@@ -89,7 +92,10 @@ export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions):
         reconnectionHandle = startOfflineReconnection<ApiSessionClient>({
             serverUrl: configuration.serverUrl,
             onReconnected: async () => {
-                const resp = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+                // If resuming an existing Happy session, reconnect to it — never create a new one
+                const resp = happySessionId
+                    ? await reconnectToExistingSession(happySessionId)
+                    : await api.getOrCreateSession({ tag: sessionTag, metadata, state });
                 if (!resp) throw new Error('Server unavailable');
                 const realSession = api.sessionSyncClient(resp);
                 // Notify caller to swap the session reference

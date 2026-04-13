@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # Stage 1: install dependencies with workspace context
 FROM node:20-alpine AS deps
 
@@ -20,7 +22,12 @@ COPY packages/happy-server/prisma packages/happy-server/prisma
 COPY packages/happy-cli/scripts packages/happy-cli/scripts
 COPY packages/happy-cli/tools packages/happy-cli/tools
 
-RUN SKIP_HAPPY_WIRE_BUILD=1 yarn install --frozen-lockfile --ignore-engines
+# Mount persistent yarn and npm caches so downloaded packages survive
+# across builds even when package.json changes. This avoids re-downloading
+# the entire dependency tree on every lockfile update.
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn/v6,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    SKIP_HAPPY_WIRE_BUILD=1 yarn install --frozen-lockfile --ignore-engines
 
 # Stage 2: build the web app
 FROM deps AS builder

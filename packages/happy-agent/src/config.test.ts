@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from './config';
@@ -16,17 +16,28 @@ describe('config', () => {
     });
 
     describe('defaults', () => {
-        it('uses default server URL', () => {
-            const config = loadConfig();
-            expect(config.serverUrl).toBe('https://api.cluster-fluster.com');
+        it('exits with error when HAPPY_SERVER_URL is not set', () => {
+            const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {
+                throw new Error('process.exit');
+            }) as any);
+            const mockError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            expect(() => loadConfig()).toThrow('process.exit');
+            expect(mockExit).toHaveBeenCalledWith(1);
+            expect(mockError).toHaveBeenCalledWith(expect.stringContaining('HAPPY_SERVER_URL'));
+
+            mockExit.mockRestore();
+            mockError.mockRestore();
         });
 
         it('uses default home directory', () => {
+            process.env.HAPPY_SERVER_URL = 'https://test.example.com';
             const config = loadConfig();
             expect(config.homeDir).toBe(join(homedir(), '.happy'));
         });
 
         it('derives credential path from home directory', () => {
+            process.env.HAPPY_SERVER_URL = 'https://test.example.com';
             const config = loadConfig();
             expect(config.credentialPath).toBe(join(homedir(), '.happy', 'agent.key'));
         });
@@ -40,12 +51,14 @@ describe('config', () => {
         });
 
         it('overrides home directory with HAPPY_HOME_DIR', () => {
+            process.env.HAPPY_SERVER_URL = 'https://test.example.com';
             process.env.HAPPY_HOME_DIR = '/tmp/custom-happy';
             const config = loadConfig();
             expect(config.homeDir).toBe('/tmp/custom-happy');
         });
 
         it('derives credential path from overridden home directory', () => {
+            process.env.HAPPY_SERVER_URL = 'https://test.example.com';
             process.env.HAPPY_HOME_DIR = '/tmp/custom-happy';
             const config = loadConfig();
             expect(config.credentialPath).toBe('/tmp/custom-happy/agent.key');

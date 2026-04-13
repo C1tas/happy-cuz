@@ -481,6 +481,13 @@ export default function MachineDetailScreen() {
                                 )}
                             </>
                         )}
+                        {metadata?.gitCommitHash && (
+                            <Item
+                                title={t('machine.gitCommit')}
+                                subtitle={metadata.gitCommitHash}
+                                subtitleStyle={{ fontFamily: 'Menlo', fontSize: 13 }}
+                            />
+                        )}
                         <Item
                             title={t('machine.daemonStateVersion')}
                             subtitle={String(machine.daemonStateVersion)}

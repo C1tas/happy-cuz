@@ -10,6 +10,20 @@ const config = getDefaultConfig(__dirname, {
 // Source: https://shopify.github.io/react-native-skia/docs/getting-started/installation/
 config.resolver.assetExts.push('wasm');
 
+// Force libsodium to resolve CJS entry on web.
+// The ESM build (libsodium.mjs) uses import.meta.url which causes a SyntaxError
+// because Metro bundles web as a regular <script>, not <script type="module">.
+const path = require("path");
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === 'web' && moduleName === 'libsodium') {
+    return {
+      filePath: path.resolve(__dirname, 'node_modules/libsodium/dist/modules/libsodium.js'),
+      type: 'sourceFile',
+    };
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
+
 // Enable inlineRequires for proper Skia and Reanimated loading
 // Source: https://shopify.github.io/react-native-skia/docs/getting-started/web/
 // Without this, Skia throws "react-native-reanimated is not installed" error

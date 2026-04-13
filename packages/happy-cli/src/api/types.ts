@@ -80,6 +80,8 @@ export interface ClientToServerEvents {
     compressing?: boolean;
     mode?: 'local' | 'remote';
     hud?: SessionHudData;
+    permissionMode?: PermissionMode;
+    currentModel?: string;
   }) => void
   'session-end': (data: { sid: string, time: number }) => void,
   'update-metadata': (data: { sid: string, expectedVersion: number, metadata: string }, cb: (answer: {
@@ -164,6 +166,7 @@ export const MachineMetadataSchema = z.object({
     happyAgentAuthenticated: z.boolean(),
     detectedAt: z.number(),
   }).optional(),
+  gitCommitHash: z.string().optional(),
 })
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
@@ -301,6 +304,7 @@ export type Metadata = {
   flavor?: string
   sandbox?: SandboxConfig | null
   dangerouslySkipPermissions?: boolean | null
+  gitCommitHash?: string | null
 };
 
 export type AgentState = {

@@ -17,6 +17,7 @@ interface ChatHeaderViewProps {
     subtitle?: string;
     onBackPress?: () => void;
     onAvatarPress?: () => void;
+    onInfoPress?: () => void;
     avatarId?: string;
     backgroundColor?: string;
     tintColor?: string;
@@ -34,6 +35,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     subtitle,
     onBackPress,
     onAvatarPress,
+    onInfoPress,
     avatarId,
     isConnected = true,
     flavor,
@@ -157,6 +159,16 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                         )}
                     </View>
 
+                    {onInfoPress && (
+                        <Pressable onPress={onInfoPress} style={styles.infoButton} hitSlop={10}>
+                            <Ionicons
+                                name="ellipsis-horizontal"
+                                size={20}
+                                color={theme.colors.header.tint}
+                            />
+                        </Pressable>
+                    )}
+
                     {avatarId && onAvatarPress && (
                         <View collapsable={false} ref={avatarAnchorRef} style={styles.avatarButtonSlot}>
                             {avatarMenuSession ? (
@@ -246,6 +258,12 @@ const styles = StyleSheet.create({
     avatarButtonSlot: {
         marginRight: Platform.select({ ios: -8, default: -8 }),
         overflow: 'visible',
+    },
+    infoButton: {
+        width: 32,
+        height: 44,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     avatarButton: {
         width: 44,

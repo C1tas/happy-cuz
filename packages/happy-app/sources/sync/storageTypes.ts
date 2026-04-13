@@ -45,6 +45,7 @@ export const MetadataSchema = z.object({
     flavor: z.string().nullish(), // Session flavor/variant identifier
     sandbox: z.any().nullish(), // Sandbox config metadata from CLI (or null when disabled)
     dangerouslySkipPermissions: z.boolean().nullish(), // Claude --dangerously-skip-permissions mode (or null when unknown)
+    gitCommitHash: z.string().nullish(), // Git commit hash of the CLI build
     lifecycleState: z.string().optional(),
     lifecycleStateSince: z.number().optional(),
     archivedBy: z.string().optional(),
@@ -128,6 +129,10 @@ export interface Session {
         activeToolTarget?: string;
         completedTools?: number;
     } | null;
+    /** CLI-reported permission mode (from keepAlive) */
+    cliPermissionMode?: string | null;
+    /** CLI-reported current model (from keepAlive) */
+    cliCurrentModel?: string | null;
 }
 
 export interface DecryptedMessage {
@@ -171,6 +176,7 @@ export const MachineMetadataSchema = z.object({
         happyAgentAuthenticated: z.boolean(),
         detectedAt: z.number(),
     }).optional(),
+    gitCommitHash: z.string().optional(),
 });
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>;

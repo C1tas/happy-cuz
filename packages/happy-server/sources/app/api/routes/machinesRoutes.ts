@@ -116,14 +116,28 @@ export function machinesRoutes(app: Fastify) {
 
         const machines = await db.machine.findMany({
             where: { accountId: userId },
-            orderBy: { lastActiveAt: 'desc' }
+            orderBy: { lastActiveAt: 'desc' },
+            take: 50,
+            select: {
+                id: true,
+                metadata: true,
+                metadataVersion: true,
+                // daemonState excluded from list — delivered via real-time WebSocket updates
+                daemonStateVersion: true,
+                dataEncryptionKey: true,
+                seq: true,
+                active: true,
+                lastActiveAt: true,
+                createdAt: true,
+                updatedAt: true,
+            }
         });
 
         return machines.map(m => ({
             id: m.id,
             metadata: m.metadata,
             metadataVersion: m.metadataVersion,
-            daemonState: m.daemonState,
+            daemonState: null,
             daemonStateVersion: m.daemonStateVersion,
             dataEncryptionKey: m.dataEncryptionKey ? Buffer.from(m.dataEncryptionKey).toString('base64') : null,
             seq: m.seq,

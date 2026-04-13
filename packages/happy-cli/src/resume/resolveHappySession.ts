@@ -5,11 +5,15 @@ import { z } from 'zod';
 import { decodeBase64, decryptLegacy, decryptWithDataKey } from '@/api/encryption';
 import type { Metadata } from '@/api/types';
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 import {
     getLocalHappyAgentCredentialPath,
     readLocalHappyAgentCredentials,
     type LocalHappyAgentCredentials,
 } from './localHappyAgentAuth';
+
+/** Timeout for session list fetch during resume (ms) */
+const SESSION_FETCH_TIMEOUT = 10_000;
 
 const ResumableMetadataSchema = z.object({
     path: z.string().min(1),
@@ -20,8 +24,12 @@ const ResumableMetadataSchema = z.object({
 
 type RawSession = {
     id: string;
+    seq: number;
     active: boolean;
     metadata: string;
+    metadataVersion: number;
+    agentState: string | null;
+    agentStateVersion: number;
     dataEncryptionKey: string | null;
 };
 
@@ -122,12 +130,16 @@ export async function resolveHappySession(sessionId: string): Promise<ResumableH
             headers: {
                 Authorization: `Bearer ${credentials.token}`,
             },
+            timeout: SESSION_FETCH_TIMEOUT,
         });
         sessions = (response.data as { sessions: RawSession[] }).sessions;
     } catch (error) {
         if (error instanceof AxiosError) {
             if (error.response?.status === 401) {
                 throw new Error('Happy session lookup authentication expired. Run `happy-agent auth login` in this environment.');
+            }
+            if (error.code === 'ECONNABORTED' || error.code === 'ERR_CANCELED') {
+                throw new Error(`Happy session lookup timed out after ${SESSION_FETCH_TIMEOUT / 1000}s. Server may be overloaded.`);
             }
             throw new Error(`Failed to load Happy sessions: ${error.message}`);
         }
@@ -139,5 +151,69 @@ export async function resolveHappySession(sessionId: string): Promise<ResumableH
         id: matched.id,
         active: matched.active,
         metadata: decryptSessionMetadata(matched, credentials),
+    };
+}
+
+export type ReconnectableSession = {
+    id: string;
+    seq: number;
+    encryptionKey: Uint8Array;
+    encryptionVariant: 'legacy' | 'dataKey';
+    metadata: Metadata;
+    metadataVersion: number;
+    agentState: null;
+    agentStateVersion: number;
+};
+
+/**
+ * Fetch an existing Happy session and recover its encryption key for reconnection.
+ * Unlike resolveHappySession (which only returns metadata), this returns everything
+ * needed to create an ApiSessionClient and continue using the same session.
+ *
+ * Returns null if the session cannot be fetched within the timeout, allowing the
+ * caller to fall back to creating a fresh session.
+ */
+export async function reconnectToExistingSession(sessionId: string): Promise<ReconnectableSession | null> {
+    const credentials = readAgentCredentials();
+
+    let sessions: RawSession[];
+    try {
+        const response = await axios.get(`${configuration.serverUrl}/v1/sessions`, {
+            headers: {
+                Authorization: `Bearer ${credentials.token}`,
+            },
+            timeout: SESSION_FETCH_TIMEOUT,
+        });
+        sessions = (response.data as { sessions: RawSession[] }).sessions;
+    } catch (error) {
+        if (error instanceof AxiosError) {
+            if (error.response?.status === 401) {
+                throw new Error('Session reconnection authentication expired. Run `happy-agent auth login` in this environment.');
+            }
+            // On timeout or network error: return null so the caller can fall back
+            logger.debug(`[Reconnect] Failed to fetch sessions for reconnection (${error.code ?? error.message}), will fall back to new session`);
+            return null;
+        }
+        throw error;
+    }
+
+    const match = sessions.find((s) => s.id === sessionId);
+    if (!match) {
+        logger.debug(`[Reconnect] Session ${sessionId} not found in ${sessions.length} sessions, will fall back to new session`);
+        return null;
+    }
+
+    const encryption = resolveSessionEncryption(match, credentials);
+    const metadata = decryptSessionMetadata(match, credentials);
+
+    return {
+        id: match.id,
+        seq: match.seq,
+        encryptionKey: encryption.key,
+        encryptionVariant: encryption.variant,
+        metadata,
+        metadataVersion: match.metadataVersion,
+        agentState: null,
+        agentStateVersion: match.agentStateVersion,
     };
 }

@@ -56,12 +56,9 @@ environments/data/
 
 # Development planning notes (keep local, don't commit)
 notes/
-docs/notes/
+docs/
 # ralphex progress logs
 progress*.txt
-
-# OpenCode trace output (script is committed, output is not)
-docs/competition/opencode/traces/
 
 # Firebase config
 packages/happy-app/google-services.json
@@ -76,5 +73,6 @@ packages/happy-app/.credentials-backup/
 test-results/
 
 # Local deployment scripts
-deploy-server.sh
+local_deploy.sh
+local_update.sh
 google-services.json

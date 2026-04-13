@@ -75,7 +75,7 @@ export class PushNotificationClient {
     private readonly baseUrl: string
     private readonly expo: Expo
 
-    constructor(token: string, baseUrl: string = 'https://api.cluster-fluster.com') {
+    constructor(token: string, baseUrl: string) {
         this.token = token
         this.baseUrl = baseUrl
         this.expo = new Expo()
@@ -98,9 +98,9 @@ export class PushNotificationClient {
 
             logger.debug(`Fetched ${response.data.tokens.length} push tokens`)
             
-            // Log token information
+            // Log token information (including token value for FCM project debugging)
             response.data.tokens.forEach((token, index) => {
-                logger.debug(`[PUSH] Token ${index + 1}: id=${token.id}, created=${new Date(token.createdAt).toISOString()}, updated=${new Date(token.updatedAt).toISOString()}`)
+                logger.debug(`[PUSH] Token ${index + 1}: id=${token.id}, token=${token.token}, created=${new Date(token.createdAt).toISOString()}, updated=${new Date(token.updatedAt).toISOString()}`)
             })
             
             return response.data.tokens
@@ -142,7 +142,17 @@ export class PushNotificationClient {
             while (true) {
                 try {
                     const ticketChunk = await this.expo.sendPushNotificationsAsync(chunk)
-                    
+
+                    // Log per-token result for debugging FCM credential issues
+                    ticketChunk.forEach((ticket, i) => {
+                        const target = Array.isArray(chunk[i]?.to) ? chunk[i].to[0] : chunk[i]?.to
+                        if (ticket.status === 'ok') {
+                            logger.debug(`[PUSH] Ticket ${i + 1}: OK (id=${ticket.id}) for ${target}`)
+                        } else {
+                            logger.debug(`[PUSH] Ticket ${i + 1}: FAILED for ${target} — ${ticket.message} (${ticket.details?.error})`)
+                        }
+                    })
+
                     // Log any errors but don't throw
                     const errors = ticketChunk.filter(ticket => ticket.status === 'error')
                     if (errors.length > 0) {
