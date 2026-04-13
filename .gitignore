@@ -65,6 +65,16 @@ docs/competition/opencode/traces/
 
 # Firebase config
 packages/happy-app/google-services.json
+packages/happy-app/google-services-cuz.json
+packages/happy-app/.credentials-backup/
+
+# Firebase service account keys (NEVER commit)
+**/happy-cuz-*.json
+*-service-account*.json
 
 # Test results
 test-results/
+
+# Local deployment scripts
+deploy-server.sh
+google-services.json
