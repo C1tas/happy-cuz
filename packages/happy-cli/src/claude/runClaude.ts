@@ -221,6 +221,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // Create realtime session — single instance used for ALL metadata/state operations
     const session = api.sessionSyncClient(response);
 
+    // Enable drain mode on resume/reconnect to prevent stale task re-execution.
+    // Any user messages fetched during initial sync will be logged and dropped.
+    const isResumeOrReconnect = !!options.happySessionId;
+    if (isResumeOrReconnect) {
+        session.setDrainMode(true);
+        logger.debug(`[CLAUDE] Drain mode enabled for resume/reconnect session: ${response.id}`);
+    }
+
     // For reconnected sessions, push fresh metadata via the main session client
     if (options.happySessionId) {
         logger.debug(`[CLAUDE] Reconnected to existing session: ${response.id}, pushing fresh metadata`);
@@ -432,6 +440,18 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debugLargeJson('User message pushed to queue:', message)
     });
 
+    // End drain mode and clear any stale messages that arrived during bootstrap.
+    // This must happen AFTER onUserMessage is registered so future messages flow correctly.
+    if (isResumeOrReconnect) {
+        const dropped = session.drainAndReady();
+        if (dropped > 0) {
+            logger.debug(`[CLAUDE] Resume bootstrap: dropped ${dropped} stale message(s) from previous session`);
+        }
+        // Clear message queue to prevent auto-switch to remote mode from stale messages
+        messageQueue.reset();
+        logger.debug('[CLAUDE] Resume bootstrap: message queue cleared');
+    }
+
     // Setup signal handlers for graceful shutdown
     const cleanup = async () => {
         logger.debug('[START] Received termination signal, cleaning up...');
@@ -531,6 +551,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()
     (currentSession as Session | null)?.cleanup();
+
+    // Immediately quiesce stdin to prevent "second layer" exit feel.
+    // Without this, stdin remains flowing during async cleanup below,
+    // showing a cursor and requiring an extra C-d to exit.
+    process.stdin.pause();
+    if (process.stdin.isTTY) {
+        try { process.stdin.setRawMode(false); } catch { /* stdin may be closed */ }
+    }
 
     // Send session death message
     session.sendSessionDeath();

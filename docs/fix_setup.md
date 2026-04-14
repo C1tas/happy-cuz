@@ -287,3 +287,182 @@ adb install -r packages/happy-app/android/app/build/outputs/apk/release/app-rele
 - 切换变体时（如 dev → prod-cuz），必须重新 `prebuild --clean`，原生目录是变体专属的
 - Release APK 使用 debug keystore 签名（非生产签名）
 - 服务端部署（`deploy-server.sh`）与 APK 编译相互独立，可并行执行
+
+---
+
+## 14. Session Resume 任务重放修复（lastSeq 初始化 + drain 模式）
+
+**问题**: 通过 `happy claude --resume claude_session_id`（本地 CLI 或 daemon）重启会话时，服务端尚未下发的历史消息被重新拉取并执行。CLI 自动进入 remote 控制模式，重复执行已完成的任务。
+
+**根因**: `ApiSessionClient` 构造函数将 `lastSeq` 硬编码为 `0`（`apiSession.ts:100`），忽略 `Session` 类型中已携带的 `seq` 值。重连时 `fetchMessages(after_seq=0)` 拉取全部历史消息，UserMessage 路由到 `MessageQueue2`，触发 Claude 重新执行。同时 `claudeLocalLauncher.ts:99` 检测到队列非空后自动切换至 remote 模式。
+
+**修复（三层保障）**:
+
+1. **lastSeq 初始化**（`apiSession.ts`）: `lastSeq = session.seq`，仅拉取 seq > session.seq 的新消息。
+2. **Drain 模式**（`apiSession.ts`）: 新增 `setDrainMode()` / `drainAndReady()` 方法。resume/reconnect 时启用 drain，`routeIncomingMessage()` 中 UserMessage 被记录日志后丢弃，不投递到回调或缓冲区。
+3. **Queue 重置**（`runClaude.ts`）: drain 结束后调用 `messageQueue.reset()` 清空残留消息，防止 auto-switch 到 remote 模式。
+
+**涉及文件**:
+- CLI: `apiSession.ts`（lastSeq 初始化 + drain 模式逻辑）
+- CLI: `runClaude.ts`（resume 场景下启用 drain、结束 drain、重置队列、退出前暂停 stdin）
+
+---
+
+## 15. PTY/Ink 双光标修复（Phase 2 — stdin/stdout 生命周期）
+
+**问题**: Section 9 的 stdin 守卫仅解决了 remote→local 切换时的 raw-mode 冲突。但以下场景仍存在双光标、双会话感、C-d 需两次退出的问题：
+
+1. **stdin 在子进程退出后无条件 resume**（`claudeLocal.ts:399`）: Claude Code 退出后 `process.stdin.resume()` 使 stdin 进入流式状态，但 `runClaude.ts` 的异步清理（flush、close）尚未完成，导致终端显示光标，用户感觉 "另一个会话" 仍在运行。
+2. **模式切换间隙 stdin 无 handler**：Ink unmount 后到 `claudeLocal.ts:189` 调用 `stdin.pause()` 之间，stdin 处于 raw + flowing 状态，输入无接收方。
+3. **Ink unmount 时 stdout cursor-show 写入未被拦截**：`cliCursor.show()` 在 alt screen 中写入 `\x1b[?25h`，导致双缓冲区都显示光标。
+4. **Ink cleanup 排空时间不足**：`process.nextTick` 仅给一个微任务周期，Ink React unmount 涉及多轮异步。
+
+**修复**:
+- **`claudeLocal.ts`**: 移除 finally 中的无条件 `process.stdin.resume()`，改由调用方管理 stdin 生命周期。
+- **`claudeRemoteLauncher.ts`**: switch 路径中 drain stdin buffer 后立即 `process.stdin.pause()`；stdin 守卫同时 monkey-patch `process.stdout.write` 拦截 cursor-show 序列；cleanup drain 时间从 `process.nextTick` 改为 `setTimeout(50ms)`。
+- **`loop.ts`**: remote→local 切换前显式 `process.stdin.pause()`，确保 local launcher 接管时 stdin 处于已暂停状态。
+- **`runClaude.ts`**: loop 退出后、异步清理前立即 `process.stdin.pause()` + `setRawMode(false)`，消除 "第二层退出" 感。
+
+**涉及文件**:
+- CLI: `claudeLocal.ts`（移除 finally 中 stdin.resume）
+- CLI: `claudeRemoteLauncher.ts`（stdin pause + stdout guard + 50ms drain）
+- CLI: `loop.ts`（切换前 stdin.pause）
+- CLI: `runClaude.ts`（退出前 stdin 静默）
+
+**调试方法**:
+```bash
+HAPPY_TERMINAL_DEBUG=1 ./bin/happy.mjs daemon start
+# 查看 /tmp/happy-terminal-debug-{pid}.log
+# 预期新增日志:
+#   "suppressed cursor-show write during Ink unmount"
+#   "stdin + stdout guards removed"
+```
+
+---
+
+## 16. Web App 页面加载性能分析与 nginx 优化
+
+**问题**: 部署到 `https://happy-web.sg.c1tas.pw` 的 Expo Web 应用页面加载极慢（>2 分钟超时），浏览器报 `net::ERR_HTTP2_PROTOCOL_ERROR`，页面始终白屏。
+
+**分析工具**: Playwright CDP 级性能分析脚本 `test-results/perf-audit.mjs`，收集 Performance Timing API、CDP 网络瀑布图、JS/CSS Coverage、Chrome Performance Trace。
+
+### 根因分析
+
+**根因 1（致命）: nginx `gzip_types` 未启用**
+
+nginx 全局配置中 `gzip on;` 已开启，但 `gzip_types` 行被注释。默认 nginx 仅压缩 `text/html`。导致：
+- `index-*.js`（7.5 MB）和 `__common-*.js`（2.5 MB）以原始大小传输
+- 10+ MB 未压缩 JS 通过 HTTP/2 下载，触发协议错误 `net::ERR_HTTP2_PROTOCOL_ERROR`
+- Chromium 在 132 秒后放弃下载，页面永远白屏
+
+**根因 2: 无缓存控制头**
+
+所有静态资源（hash-named JS/CSS/字体/图片）未设置 `Cache-Control` 或 `expires`，每次访问重新下载全部资源。
+
+**根因 3: JS Bundle 体积**
+
+| Bundle | 原始大小 | gzip 后 | 压缩率 |
+|--------|---------|---------|--------|
+| `index-*.js` | 7.47 MB | 1.90 MB | 75% |
+| `__common-*.js` | 2.47 MB | 594 KB | 76% |
+| `canvaskit.wasm` | 7.7 MB | 未加载 | - |
+| **JS 合计** | **9.94 MB** | **2.48 MB** | **75%** |
+
+JS Coverage 显示初始加载仅使用 69% 代码（30.7% = 7.5 MB 未使用）。
+
+### 修复
+
+**nginx 配置更新**（`deploy-webapp.sh` + 远程应用）:
+
+```nginx
+# gzip 压缩
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 6;
+gzip_min_length 256;
+gzip_types text/plain text/css text/javascript application/javascript
+           application/json application/wasm application/xml image/svg+xml;
+gzip_static on;
+
+# 传输优化
+sendfile on;
+tcp_nopush on;
+tcp_nodelay on;
+
+# hash-named 静态资源长缓存（1 年，immutable）
+location /_expo/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# SPA 入口不缓存
+location / {
+    add_header Cache-Control "no-cache";
+}
+```
+
+### 修复前后对比
+
+| 指标 | 修复前 | 修复后 | 改善 |
+|------|--------|--------|------|
+| DOM Content Loaded | >120s（超时） | **1.75s** | **68x** |
+| FCP | N/A（白屏） | **2.51s** | 可用 |
+| Network Idle | 不可达 | **3.88s** | 可用 |
+| 总传输量 | 5.2 KB（失败） | **4.24 MB** | 完整加载 |
+| Console Errors | 1（h2 协议错误） | **0** | 清零 |
+| 压缩率 | 0%（未压缩） | **63.7%** | - |
+
+### 进一步优化方向（未实施）
+
+1. **Bundle 分割**: `index.js` 包含 30% 未使用代码（5 MB），可通过 Expo Router lazy import 拆分
+2. **字体子集化**: 11 个字体文件共 1.74 MB，大部分字符未使用
+3. **`canvaskit.wasm` 延迟加载**: 7.7 MB Skia WASM 当前仅在使用图表时才懒加载，但仍可预压缩为 `.wasm.gz`
+4. **预压缩**: 构建时生成 `.gz` 文件配合 `gzip_static on;`，避免运行时压缩开销
+5. **V8 编译**: 1.22s 用于 JS 编译解析，可通过 Code Splitting 减少初始编译量
+
+**涉及文件**:
+- 部署: `deploy-webapp.sh`（nginx 配置模板更新）
+- 工具: `test-results/perf-audit.mjs`（Playwright CDP 性能分析脚本）
+
+---
+
+## 17. Local Auth — CLI 本地密钥生成
+
+**问题**: CLI 认证仅支持两种方式：手机 App 扫码（Mobile）和浏览器登录（Web），均依赖外部设备或浏览器。在纯终端环境（服务器、容器、SSH）中不便使用。
+
+**修复**: 新增第三种认证方式 "Local Key"，完全在本地完成账号创建：
+
+1. CLI 生成 32 字节随机密钥（Ed25519 seed）
+2. 通过 `authGetToken(secret)` 向服务端 `POST /v1/auth` 发起 challenge-response 认证
+3. 服务端根据 Ed25519 公钥 upsert Account，返回 token
+4. 本地存储 legacy credentials（`writeCredentialsLegacy`）
+5. 使用 `formatSecretKeyForBackup()` 将密钥格式化为 Base32 `XXXXX-XXXXX-...` 格式显示给用户
+
+用户保存此 backup key 后，可在任意设备/Web App 通过 "Restore" 功能恢复账号（App 端 `restore/manual.tsx` 已支持）。
+
+**无需服务端修改**: `POST /v1/auth` 已原生支持 Ed25519 challenge-response + Account upsert。
+
+**涉及文件**:
+- CLI: `ui/ink/AuthSelector.tsx`（新增 `'local'` 选项，`AuthMethod` 类型扩展）
+- CLI: `ui/auth.ts`（新增 `doLocalAuth()` 函数，`doAuth()` 重构为 local 短路）
+
+---
+
+## 文档索引（更新）
+
+| 文档 | 内容 |
+|------|------|
+| [error-handling-and-resume-fallback.md](./error-handling-and-resume-fallback.md) | 错误分类、事件流、resume fallback 完整实现 |
+| [session-restart-implementation.md](./session-restart-implementation.md) | 三栈重启流程 + resume fallback 章节 |
+| [cross-stack-patterns.md](./cross-stack-patterns.md) | 跨栈特性实现模式（ephemeral/persistent 管道、HUD、压缩、错误事件） |
+| [cuz-build.md](./cuz-build.md) | prod-cuz Android 构建指南与故障排除 |
+| [cli-architecture.md](./cli-architecture.md) | CLI 架构、resume 菜单、remote 模式参数 |
+| [permission-resolution.md](./permission-resolution.md) | 权限模式解析、yolo/plan 模式交互 |
+| [yolo_problem.md](./yolo_problem.md) | Yolo 模式问题分析与修复状态 |
+| [research/yolo-mode-investigation.md](./research/yolo-mode-investigation.md) | Yolo 模式根因调查 |
+| *(Section 9, inline)* | Remote→Local 切换 Ink stdin 守卫，防止双光标和输入异常 |
+| *(Section 14, inline)* | Session Resume 任务重放修复：lastSeq 初始化 + drain 模式 |
+| *(Section 15, inline)* | PTY/Ink 双光标 Phase 2：stdin/stdout 生命周期管理 |
+| *(Section 16, inline)* | Web App 页面加载性能：nginx gzip/缓存 + Playwright 分析工具 |
+| *(Section 17, inline)* | Local Auth：CLI 本地密钥生成，无需 QR/URL 登录 |

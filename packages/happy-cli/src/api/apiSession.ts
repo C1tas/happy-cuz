@@ -97,21 +97,27 @@ export class ApiSessionClient extends EventEmitter {
         startedSubagents: new Set<string>(),
         activeSubagents: new Set<string>(),
     };
-    private lastSeq = 0;
+    private lastSeq: number;
     private pendingOutbox: Array<{ content: string; localId: string }> = [];
     private readonly sendSync: InvalidateSync;
     private readonly receiveSync: InvalidateSync;
+    /** When true, incoming user messages are logged and discarded instead of delivered.
+     *  Used during session resume/reconnect to prevent re-execution of stale tasks. */
+    private drainMode = false;
+    private drainedCount = 0;
 
     constructor(token: string, session: Session) {
         super()
         this.token = token;
         this.sessionId = session.id;
+        this.lastSeq = session.seq;
         this.metadata = session.metadata;
         this.metadataVersion = session.metadataVersion;
         this.agentState = session.agentState;
         this.agentStateVersion = session.agentStateVersion;
         this.encryptionKey = session.encryptionKey;
         this.encryptionVariant = session.encryptionVariant;
+        logger.debug(`[API] Initialized lastSeq from session: ${session.seq}`);
         this.sendSync = new InvalidateSync(() => this.flushOutbox());
         this.receiveSync = new InvalidateSync(() => this.fetchMessages());
 
@@ -243,6 +249,12 @@ export class ApiSessionClient extends EventEmitter {
     private routeIncomingMessage(message: unknown) {
         const userResult = UserMessageSchema.safeParse(message);
         if (userResult.success) {
+            // In drain mode, log and discard user messages to prevent stale task re-execution
+            if (this.drainMode) {
+                this.drainedCount++;
+                logger.debug(`[API] [DRAIN] Dropping user message during bootstrap (total dropped: ${this.drainedCount})`);
+                return;
+            }
             if (this.pendingMessageCallback) {
                 this.pendingMessageCallback(userResult.data);
             } else {
@@ -251,6 +263,35 @@ export class ApiSessionClient extends EventEmitter {
             return;
         }
         this.emit('message', message);
+    }
+
+    /**
+     * Enable or disable drain mode. When enabled, incoming user messages are
+     * logged and discarded instead of being delivered to the message callback.
+     * Used during session resume/reconnect to prevent re-execution of stale tasks.
+     */
+    setDrainMode(enabled: boolean) {
+        this.drainMode = enabled;
+        if (enabled) {
+            this.drainedCount = 0;
+        }
+        logger.debug(`[API] Drain mode ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    /**
+     * End drain mode and clear any buffered pending messages.
+     * Returns the number of messages that were dropped during drain.
+     */
+    drainAndReady(): number {
+        const dropped = this.drainedCount + this.pendingMessages.length;
+        if (this.pendingMessages.length > 0) {
+            logger.debug(`[API] [DRAIN] Clearing ${this.pendingMessages.length} buffered pending messages`);
+        }
+        this.pendingMessages = [];
+        this.drainMode = false;
+        this.drainedCount = 0;
+        logger.debug(`[API] Drain complete, total dropped: ${dropped}, now ready for messages`);
+        return dropped;
     }
 
     private async fetchMessages() {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Text, useInput, Box } from 'ink';
 
-export type AuthMethod = 'mobile' | 'web';
+export type AuthMethod = 'mobile' | 'web' | 'local';
 
 interface AuthSelectorProps {
     onSelect: (method: AuthMethod) => void;
@@ -22,6 +22,10 @@ export const AuthSelector: React.FC<AuthSelectorProps> = ({ onSelect, onCancel }
         {
             method: 'web',
             label: 'Web Browser'
+        },
+        {
+            method: 'local',
+            label: 'Local Key (no app/browser needed)'
         }
     ];
 
@@ -40,6 +44,9 @@ export const AuthSelector: React.FC<AuthSelectorProps> = ({ onSelect, onCancel }
         } else if (input === '2') {
             setSelectedIndex(1);
             onSelect('web');
+        } else if (input === '3') {
+            setSelectedIndex(2);
+            onSelect('local');
         }
     });
 
@@ -65,7 +72,7 @@ export const AuthSelector: React.FC<AuthSelectorProps> = ({ onSelect, onCancel }
             </Box>
 
             <Box marginTop={1}>
-                <Text dimColor>Use arrows or 1-2 to select, Enter to confirm</Text>
+                <Text dimColor>Use arrows or 1-3 to select, Enter to confirm</Text>
             </Box>
         </Box>
     );

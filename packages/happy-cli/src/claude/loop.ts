@@ -110,6 +110,9 @@ export async function loop(opts: LoopOptions): Promise<number> {
                     case 'exit':
                         return 0;
                     case 'switch':
+                        // Ensure stdin is quiesced before entering local mode.
+                        // claudeLocal will manage its own stdin lifecycle (pause + setRawMode(false) + inherit).
+                        process.stdin.pause();
                         mode = 'local';
                         opts.onModeChange?.(mode);
                         break;

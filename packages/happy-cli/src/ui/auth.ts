@@ -8,6 +8,8 @@ import { delay } from "@/utils/time";
 import { writeCredentialsLegacy, readCredentials, updateSettings, Credentials, writeCredentialsDataKey } from "@/persistence";
 import { generateWebAuthUrl } from "@/api/webAuth";
 import { openBrowser } from "@/utils/browser";
+import { authGetToken } from "@/api/auth";
+import { formatSecretKeyForBackup } from "@/utils/backupKey";
 import { AuthSelector, AuthMethod } from "./ink/AuthSelector";
 import { render } from 'ink';
 import React from 'react';
@@ -24,6 +26,12 @@ export async function doAuth(): Promise<Credentials | null> {
         process.exit(0);
     }
 
+    // Local auth is self-contained — no ephemeral keypair or auth request needed
+    if (authMethod === 'local') {
+        return await doLocalAuth();
+    }
+
+    // Mobile and web flows need ephemeral keypair + server auth request
     // Generating ephemeral key
     const secret = new Uint8Array(randomBytes(32));
     const keypair = tweetnacl.box.keyPair.fromSecretKey(secret);
@@ -133,6 +141,44 @@ async function doWebAuth(keypair: tweetnacl.BoxKeyPair): Promise<Credentials | n
     console.log('');
 
     return await waitForAuthentication(keypair);
+}
+
+/**
+ * Handle local authentication flow.
+ * Generates a 32-byte secret locally, authenticates with server via
+ * Ed25519 challenge-response (POST /v1/auth), stores legacy credentials,
+ * and displays the backup key for cross-device restore.
+ */
+async function doLocalAuth(): Promise<Credentials | null> {
+    console.clear();
+    console.log('\nLocal Key Authentication\n');
+    console.log('Generating your account...\n');
+
+    const secret = new Uint8Array(randomBytes(32));
+
+    let token: string;
+    try {
+        token = await authGetToken(secret);
+    } catch (error) {
+        console.log('Failed to register with server. Please try again.');
+        return null;
+    }
+
+    await writeCredentialsLegacy({ secret, token });
+
+    const backupKey = formatSecretKeyForBackup(secret);
+    console.log('✓ Account created successfully!\n');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('\n  YOUR BACKUP KEY (save this somewhere safe!):\n');
+    console.log(`  ${backupKey}\n`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('\nUse this key to restore your account on any device.');
+    console.log('If you lose this key, you will lose access to your account.\n');
+
+    return {
+        encryption: { type: 'legacy', secret },
+        token
+    };
 }
 
 /**

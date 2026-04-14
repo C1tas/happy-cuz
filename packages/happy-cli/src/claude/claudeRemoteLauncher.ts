@@ -627,19 +627,38 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 process.stdin.unref = (() => {}) as typeof process.stdin.unref;
                 termLog('Cleanup: guarding stdin from Ink raw-mode teardown');
 
+                // Also guard stdout from Ink's cliCursor.show() writes during unmount.
+                // These \x1b[?25h sequences fire while still in alt screen, causing
+                // cursor-show in both alt and main screen buffers (dual cursor).
+                const origStdoutWrite = process.stdout.write;
+                const cursorShowSeq = '\x1b[?25h';
+                process.stdout.write = function guardedWrite(this: NodeJS.WriteStream, ...args: any[]): boolean {
+                    // Suppress cursor-show escape sequences during Ink unmount
+                    if (typeof args[0] === 'string' && args[0].includes(cursorShowSeq)) {
+                        termLog('Cleanup: suppressed cursor-show write during Ink unmount');
+                        return true;
+                    }
+                    return origStdoutWrite.apply(this, args as any);
+                } as typeof process.stdout.write;
+                termLog('Cleanup: guarding stdout from Ink cursor-show writes');
+
                 try {
                     inkInstance.unmount();
                 } finally {
                     process.stdin.setRawMode = origSetRawMode;
                     process.stdin.unref = origUnref;
-                    termLog('Cleanup: stdin guard removed');
+                    process.stdout.write = origStdoutWrite;
+                    termLog('Cleanup: stdin + stdout guards removed');
                 }
             } else {
                 inkInstance.unmount();
             }
 
             inkInstance = null;
-            await new Promise<void>(resolve => process.nextTick(resolve));
+            // Give Ink's React unmount chain enough time to propagate through all
+            // microtasks and callbacks. A single process.nextTick is insufficient
+            // as Ink's cleanup involves multiple async operations.
+            await new Promise<void>(resolve => setTimeout(resolve, 50));
         }
 
         if (isSwitching) {
@@ -656,6 +675,11 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
             // Drain Node.js userspace stdin buffer to discard queued raw-mode input
             process.stdin.read();
+
+            // Pause stdin immediately — no data events can fire while paused.
+            // This closes the window between Ink unmount and claudeLocal's spawn
+            // where stdin would otherwise flow in raw mode with no handler attached.
+            process.stdin.pause();
 
             // Leave alternate screen buffer with lightweight attribute reset.
             // Do NOT clear screen or scrollback — preserve main buffer history.

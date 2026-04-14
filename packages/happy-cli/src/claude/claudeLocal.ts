@@ -396,7 +396,11 @@ export async function claudeLocal(opts: {
             })().catch(reject);
         });
     } finally {
-        process.stdin.resume();
+        // Do NOT unconditionally resume stdin here. The calling context
+        // (loop.ts -> claudeLocalLauncher or runClaude) manages stdin lifecycle.
+        // Unconditional resume() causes stdin to flow with no consumer during
+        // async cleanup, manifesting as "dual session" feel and requiring
+        // an extra C-d to exit.
         if (stopThinkingTimeout) {
             clearTimeout(stopThinkingTimeout);
             stopThinkingTimeout = null;
