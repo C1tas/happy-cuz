@@ -69,6 +69,7 @@
     "dev:local-server": "$npm_execpath run build && tsx --env-file .env.dev-local-server src/index.ts",
     "prepublishOnly": "$npm_execpath run build && $npm_execpath test",
     "release": "npx --no-install release-it",
+    "publish:npm": "bash scripts/publish.sh",
     "postinstall": "node scripts/unpack-tools.cjs",
     "// ==== Dev/Stable Variant Management ====": "echo comment",
     "stable": "node scripts/env-wrapper.cjs stable",
